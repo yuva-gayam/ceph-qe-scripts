@@ -1,19 +1,44 @@
+"""
+
+Test multisite negative scenarios in Ceph RGW
+
+Usage:
+
+test_negative_radosgwadmin_commands.py -c <input_yaml> --rgw-node <rgw_ip>
+<input_yaml>:
+
+multisite_configs/test_negative_radosgw_admin_primary.yaml
+multisite_configs/test_negative_radosgw_admin_secondary.yaml
+Operation:
+
+Create realms, zonegroups, and zones with invalid or boundary values in a multisite environment.
+Test commands like realm creation, zonegroup creation, zone creation, and user creation with missing or incorrect parameters.
+Execute period pull commands with invalid credentials or URL.
+Ensure that errors are returned for each invalid scenario.
+Logs will capture all errors and results, and the script expects failures for each of the test commands.
+
+"""
 import argparse
 import os
-import sys
 import subprocess
+import sys
+
 import yaml
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "../../../..")))
 import v1.utils.log as log
 from v1.utils.test_desc import AddTestInfo
 
+
 def execute_command(command):
     """Executes a command and returns stdout, stderr, and return code."""
-    process = subprocess.Popen(command, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    process = subprocess.Popen(
+        command, shell=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+    )
     stdout, stderr = process.communicate()
     return_code = process.returncode
     return return_code, stdout, stderr
+
 
 def test_exec_primary(config, rgw_node):
     test_info = AddTestInfo("test multisite negative primary")
@@ -35,10 +60,12 @@ def test_exec_primary(config, rgw_node):
             log.info(f"Executing command: {command}. Error expected.")
             return_code, stdout, stderr = execute_command(command)
             if return_code == 0:
-                test_info.failed_status(f"Command '{command}' succeeded unexpectedly. Stdout: {stdout}, Stderr: {stderr}, Return Code: {return_code}")
+                test_info.failed_status(
+                    f"Command '{command}' succeeded unexpectedly. Stdout: {stdout}, Stderr: {stderr}, Return Code: {return_code}"
+                )
                 sys.exit(1)
             else:
-                log.info(f"{stderr} failed as expected. Error output: ")
+                log.info(f"{stderr} failed as expected.")
 
         test_info.success_status("Negative tests on ceph-pri completed")
         sys.exit(0)
@@ -46,6 +73,7 @@ def test_exec_primary(config, rgw_node):
         log.error(f"An error occurred: {e}")
         test_info.failed_status(f"An error occurred: {e}")
         sys.exit(1)
+
 
 def test_exec_secondary(config, rgw_node):
     test_info = AddTestInfo("test multisite negative secondary")
@@ -62,11 +90,12 @@ def test_exec_secondary(config, rgw_node):
             log.info(f"Executing command: {command}. Error expected.")
             return_code, stdout, stderr = execute_command(command)
             if return_code == 0:
-                test_info.failed_status(f"Command '{command}' succeeded unexpectedly. Stdout: {stdout}, Stderr: {stderr}, Return Code: {return_code}")
+                test_info.failed_status(
+                    f"Command '{command}' succeeded unexpectedly. Stdout: {stdout}, Stderr: {stderr}, Return Code: {return_code}"
+                )
                 sys.exit(1)
             else:
-                log.info(f"{stderr} failed as expected. Error output: ")
-
+                log.info(f"{stderr} failed as expected.")
 
         test_info.success_status("Negative tests on ceph-sec completed")
         sys.exit(0)
@@ -74,6 +103,7 @@ def test_exec_secondary(config, rgw_node):
         log.error(f"An error occurred: {e}")
         test_info.failed_status(f"An error occurred: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RGW Multisite Negative Tests")
