@@ -44,9 +44,20 @@ def test_exec(config, ssh_con):
     # preparing data
     user_names = ["tuffy", "scooby", "max"]
     tenant = "tenant"
-    tenant_user_info = umgmt.create_tenant_user(
-        tenant_name=tenant, user_id=user_names[0], displayname=user_names[0]
-    )
+    try:
+        tenant_user_info = umgmt.create_tenant_user(
+            tenant_name=tenant, user_id=user_names[0], displayname=user_names[0]
+        )
+    except Exception as e:
+        log.error(f"Error creating tenant user: {e}")
+        log.info("Attempting to retrieve existing user info.")
+        cmd = f"radosgw-admin user info --uid={user_names[0]} --tenant={tenant}"
+        out = utils.exec_shell_cmd(cmd)
+        try:
+            tenant_user_info = json.loads(out)
+        except json.JSONDecodeError:
+            log.error(f"Failed to retrieve user info: {out}")
+            raise TestExecError(f"Failed to retrieve user info after creation failure: {e}")
     user_info = umgmt.create_subuser(tenant_name=tenant, user_id=user_names[0])
     cmd = "radosgw-admin quota enable --quota-scope=user --uid={uid} --tenant={tenant}".format(
         uid=user_names[0], tenant=tenant
