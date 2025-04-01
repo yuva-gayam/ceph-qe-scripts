@@ -12,7 +12,6 @@ Operation:
     Create number of buckets mentioned in swift_stats.yaml
     Check swift stat command executing and giving status
 """
-
 import os
 import sys
 
@@ -20,6 +19,7 @@ sys.path.append(os.path.abspath(os.path.join(__file__, "../../../..")))
 import argparse
 import logging
 import traceback
+import json
 
 import v2.lib.resource_op as swiftlib
 import v2.utils.utils as utils
@@ -35,15 +35,53 @@ log = logging.getLogger()
 
 
 def test_exec(config, ssh_con):
-
     io_info_initialize = IOInfoInitialize()
     basic_io_structure = BasicIOInfoStructure()
     io_info_initialize.initialize(basic_io_structure.initial())
     umgmt = UserMgmt()
 
-    # preparing data
     user_names = ["tuffy", "scooby", "max"]
     tenant = "tenant"
+
+    # Check if user exists and cleanup if needed
+    cmd_user_info = f"radosgw-admin user info --uid={user_names[0]} --tenant={tenant}"
+    user_info_output = utils.exec_shell_cmd(cmd_user_info)
+
+    try:
+        json.loads(user_info_output)
+        log.info(f"User {user_names[0]} exists. Cleaning up buckets and user.")
+
+        # Delete buckets associated with the user, then remove user
+        buckets_cmd = f"radosgw-admin bucket list --uid={user_names[0]} --tenant={tenant}"
+        buckets_output = utils.exec_shell_cmd(buckets_cmd)
+        buckets_list = json.loads(buckets_output)
+
+        if isinstance(buckets_list, list) and len(buckets_list) > 0 and isinstance(buckets_list[0], str):
+            # Handle list of bucket names (strings)
+            for bucket_name in buckets_list:
+                delete_bucket_cmd = f"radosgw-admin bucket rm --bucket={bucket_name} --uid={user_names[0]} --tenant={tenant} --purge-objects"
+                utils.exec_shell_cmd(delete_bucket_cmd)
+                log.info(f"Bucket {bucket_name} deleted (associated with user {user_names[0]}).")
+
+        elif isinstance(buckets_list, list) and len(buckets_list) > 0 and isinstance(buckets_list[0], dict):
+            # Handle list of dictionaries
+            for bucket in buckets_list:
+                bucket_name = bucket['bucket']
+                delete_bucket_cmd = f"radosgw-admin bucket rm --bucket={bucket_name} --uid={user_names[0]} --tenant={tenant} --purge-objects"
+                utils.exec_shell_cmd(delete_bucket_cmd)
+                log.info(f"Bucket {bucket_name} deleted (associated with user {user_names[0]}).")
+
+        cmd_user_rm = f"radosgw-admin user rm --uid={user_names[0]} --tenant={tenant}"
+        utils.exec_shell_cmd(cmd_user_rm)
+        log.info(f"User {user_names[0]} deleted.")
+
+    except json.JSONDecodeError:
+        log.info(f"User {user_names[0]} does not exist. Creating user.")
+    except Exception as e:
+        log.error(f"Error checking or removing user: {e}")
+        raise
+
+    # Recreate the user after cleanup (or create if it didn't exist)
     try:
         tenant_user_info = umgmt.create_tenant_user(
             tenant_name=tenant, user_id=user_names[0], displayname=user_names[0]
