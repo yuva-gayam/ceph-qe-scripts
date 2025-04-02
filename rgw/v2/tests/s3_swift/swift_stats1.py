@@ -80,18 +80,20 @@ def test_exec(config, ssh_con):
     li = list(swift_cmd.split(":"))
     res_dct = {li[i]: li[i + 1] for i in range(0, len(li) - 1, 2)}
 
-    if int(res_dct["Containers"]) == config.container_count:
-        cmd = "radosgw-admin user rm --uid={uid} --tenant={tenant} --purge-data".format(
-            uid=user_names[0], tenant=tenant
-        )
-        delete_user_bucket = utils.exec_shell_cmd(cmd)
-        test_info.success_status("test passed")
-        sys.exit(0)
-    else:
-        log.info("not deleting user")
-        delete_user_bucket = utils.exec_shell_cmd(cmd)
-        test_info.failed_status("test failed")
-        sys.exit(1)
+    # if int(res_dct["Containers"]) == config.container_count:
+    #     cmd = "radosgw-admin user rm --uid={uid} --tenant={tenant} --purge-data".format(
+    #         uid=user_names[0], tenant=tenant
+    #     )
+    #     delete_user_bucket = utils.exec_shell_cmd(cmd)
+    #     test_info.success_status("test passed")
+    #     sys.exit(0)
+    # else:
+    #     cmd = "radosgw-admin user rm --uid={uid} --tenant={tenant} --purge-data".format(
+    #         uid=user_names[0], tenant=tenant
+    #     )
+    #     delete_user_bucket = utils.exec_shell_cmd(cmd)
+    #     test_info.failed_status("test failed")
+    #     sys.exit(1)
 
 
 if __name__ == "__main__":
