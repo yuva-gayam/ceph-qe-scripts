@@ -42,22 +42,22 @@ def test_exec(config, ssh_con):
 
     user_names = ["tuffy", "scooby", "max"]
     tenant = "tenant"
-
-    # Check if user exists and cleanup if needed
     try:
         tenant_user_info = umgmt.create_tenant_user(
             tenant_name=tenant, user_id=user_names[0], displayname=user_names[0]
         )
     except RGWBaseException as e:
-        if "user: tenant$tuffy exists" in str(e):
+        if f"user: tenant${user_names[0]} exists" in str(e):
             log.info("User already exists, removing and recreating.")
-            cmd = "radosgw-admin user rm --uid={uid} --tenant={tenant} --purge-data".format(
-                uid=user_names[0], tenant=tenant
-            )
+            cmd = f"radosgw-admin user rm --uid={user_names[0]} --tenant={tenant} --purge-data"
             utils.exec_shell_cmd(cmd)
-            tenant_user_info = umgmt.create_tenant_user(
-                tenant_name=tenant, user_id=user_names[0], displayname=user_names[0]
-            )
+            try:
+                tenant_user_info = umgmt.create_tenant_user(
+                    tenant_name=tenant, user_id=user_names[0], displayname=user_names[0]
+                )
+            except RGWBaseException as inner_e:
+                log.error(f"Failed to recreate user after removal: {inner_e}")
+                raise inner_e  # re-raise the exception to fail the test.
         else:
             raise e
     user_info = umgmt.create_subuser(tenant_name=tenant, user_id=user_names[0])
