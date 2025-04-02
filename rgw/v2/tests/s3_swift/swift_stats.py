@@ -14,6 +14,7 @@ Operation:
 """
 import os
 import sys
+import subprocess
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "../../../..")))
 import argparse
@@ -40,26 +41,28 @@ def test_exec(config, ssh_con):
     io_info_initialize.initialize(basic_io_structure.initial())
     umgmt = UserMgmt()
 
-    user_names = ["tuffy", "scooby", "max"]
+    user_names = ["max", "scooby", "tubyst"]
     tenant = "tenant"
     try:
+        # Check if user exists (modified section)
+        cmd = f"radosgw-admin user info --uid={user_names[0]} --tenant={tenant}"
+        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        exit_code = process.returncode
+        user_check = stdout.decode('utf-8')
+        log.info(f"Checking if user exists already:\n{user_check}")
+
+        if "user_id" in user_check:  # User exists
+            log.info(f"User tenant${user_names[0]} already exists, removing and recreating.")
+            cmd = f"radosgw-admin user rm --uid={user_names[0]} --tenant={tenant} --purge-data"
+            utils.exec_shell_cmd(cmd)
+
         tenant_user_info = umgmt.create_tenant_user(
             tenant_name=tenant, user_id=user_names[0], displayname=user_names[0]
         )
     except RGWBaseException as e:
-        if f"user: tenant${user_names[0]} exists" in str(e):
-            log.info("User already exists, removing and recreating.")
-            cmd = f"radosgw-admin user rm --uid={user_names[0]} --tenant={tenant} --purge-data"
-            utils.exec_shell_cmd(cmd)
-            try:
-                tenant_user_info = umgmt.create_tenant_user(
-                    tenant_name=tenant, user_id=user_names[0], displayname=user_names[0]
-                )
-            except RGWBaseException as inner_e:
-                log.error(f"Failed to recreate user after removal: {inner_e}")
-                raise inner_e  # re-raise the exception to fail the test.
-        else:
-            raise e
+        log.error(f"Failed to create tenant user: {e}")
+        raise e
     user_info = umgmt.create_subuser(tenant_name=tenant, user_id=user_names[0])
     cmd = "radosgw-admin quota enable --quota-scope=user --uid={uid} --tenant={tenant}".format(
         uid=user_names[0], tenant=tenant
