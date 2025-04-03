@@ -1,4 +1,4 @@
 #SCRIPT FILE: test_rgw_orphan_list.py
 config:
-test_ops:
-run_orphan_checks: true
+  test_ops:
+    run_orphan_checks: true
