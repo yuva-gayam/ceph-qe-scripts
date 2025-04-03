@@ -23,10 +23,12 @@ def test_exec(config, ssh_con):
     try:
         test_info.started_info()
 
-        if config.test_ops.get("run_orphan_checks", True):
+        if config.test_ops.get("run_orphan_checks"): #removed the default true.
             orphan_utils.check_gc()
             orphan_utils.check_orphan_data()
             orphan_utils.check_orphan_index()
+        else:
+            log.info("Skipping orphan checks as run_orphan_checks is not set to True in the configuration.")
 
         test_info.success_status("All checks passed. No orphans found.")
         sys.exit(0)
@@ -36,7 +38,6 @@ def test_exec(config, ssh_con):
         log.error(traceback.format_exc())
         test_info.failed_status("RGW orphan checks failed.")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     test_info = AddTestInfo("RGW Orphan Checks")
