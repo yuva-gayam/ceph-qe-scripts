@@ -188,47 +188,62 @@ def create_rgw_account_with_iam_user(
     return iam_user_details
 
 
-def create_bucket(bucket_name, rgw, user_info, location=None):
-    log.info("creating bucket with name: %s" % bucket_name)
-    # bucket = s3_ops.resource_op(rgw_conn, 'Bucket', bucket_name_to_create)
-    bucket = s3lib.resource_op(
-        {"obj": rgw, "resource": "Bucket", "args": [bucket_name]}
-    )
-    kw_args = None
-    if location is not None:
-        kw_args = dict(CreateBucketConfiguration={"LocationConstraint": location})
-    created = s3lib.resource_op(
-        {
-            "obj": bucket,
-            "resource": "create",
-            "args": None,
-            "kwargs": kw_args,
-            "extra_info": {"access_key": user_info["access_key"]},
-        }
-    )
-    log.info(f"bucket creation data: {created}")
-    if created is False:
-        raise TestExecError("Resource execution failed: bucket creation failed")
-    if created is not None:
-        response = HttpResponseParser(created)
-        if response.status_code == 200:
-            log.info("bucket created")
-        else:
-            raise TestExecError("bucket creation failed")
-    else:
-        raise TestExecError("bucket creation failed")
-
-    is_multisite = utils.is_cluster_multisite()
-    if is_multisite:
-        log.info("Cluster is multisite")
-        remote_site_ssh_con = get_remote_conn_in_multisite()
-
-        log.info("Check sync status in local site")
-        sync_status()
-
-        log.info("Check sync status in remote site")
-        sync_status(ssh_con=remote_site_ssh_con)
-    return bucket
+def create_bucket(bucket_name, rgw, user_info, location=None, max_retries=5, retry_interval=15):
+    log.info(f"creating bucket with name: {bucket_name}")
+    
+    for attempt in range(max_retries):
+        try:
+            # Check if RGW service is running
+            if 'running' in subprocess.run(['ceph', 'orch', 'ls', '|', 'grep', 'rgw'], capture_output=True, text=True, check=True).stdout.lower():
+                bucket = s3lib.resource_op(
+                    {"obj": rgw, "resource": "Bucket", "args": [bucket_name]}
+                )
+                kw_args = None
+                if location is not None:
+                    kw_args = dict(CreateBucketConfiguration={"LocationConstraint": location})
+                
+                created = s3lib.resource_op(
+                    {
+                        "obj": bucket,
+                        "resource": "create",
+                        "args": None,
+                        "kwargs": kw_args,
+                        "extra_info": {"access_key": user_info["access_key"]},
+                    }
+                )
+                
+                log.info(f"bucket creation data: {created}")
+                if created is False:
+                    raise TestExecError("Resource execution failed: bucket creation failed")
+                
+                if created is not None:
+                    response = HttpResponseParser(created)
+                    if response.status_code == 200:
+                        log.info("bucket created")
+                        is_multisite = utils.is_cluster_multisite()
+                        if is_multisite:
+                            log.info("Cluster is multisite")
+                            remote_site_ssh_con = get_remote_conn_in_multisite()
+                            log.info("Check sync status in local site")
+                            sync_status()
+                            log.info("Check sync status in remote site")
+                            sync_status(ssh_con=remote_site_ssh_con)
+                        return bucket
+                    else:
+                        raise TestExecError("bucket creation failed")
+                else:
+                    raise TestExecError("bucket creation failed")
+            
+            log.warning(f"RGW not running (attempt {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(retry_interval)
+        
+        except subprocess.CalledProcessError:
+            log.error(f"RGW status check failed (attempt {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(retry_interval)
+    
+    raise TestExecError(f"Bucket creation failed because RGW service was down after {max_retries} retries")
 
 
 def create_bucket_sync_init(bucket_name, rgw, user_info, location=None):
