@@ -195,8 +195,19 @@ def create_bucket(bucket_name, rgw, user_info, location=None, max_retries=5, ret
         try:
             # Check if RGW service is running using 'ceph orch ps'
             result = subprocess.run(['ceph', 'orch', 'ps', '--format', 'json'], capture_output=True, text=True, check=True)
+            log.info(f"Raw ceph orch ps output: {result.stdout}")
             services = json.loads(result.stdout)
-            rgw_running = any(service.get('service_name', '').startswith('rgw') and service.get('status') == 'running' for service in services)
+            
+            rgw_running = False
+            for service in services:
+                service_name = service.get('service_name', '')
+                status_desc = service.get('status_desc', '')
+                if service_name.startswith('rgw') and status_desc.lower() == 'running':
+                    rgw_running = True
+                    log.info(f"Found running RGW daemon: {service_name}")
+                    break
+                else:
+                    log.debug(f"Service {service_name} skipped (status: {status_desc})")
             
             if rgw_running:
                 bucket = s3lib.resource_op(
@@ -238,7 +249,7 @@ def create_bucket(bucket_name, rgw, user_info, location=None, max_retries=5, ret
                 else:
                     raise TestExecError("bucket creation failed")
             
-            log.warning(f"RGW service not running (attempt {attempt + 1}/{max_retries})")
+            log.warning(f"RGW service not running (attempt {attempt + 1}/{max_retries}). No running RGW daemon found.")
             if attempt < max_retries - 1:
                 time.sleep(retry_interval)
         
