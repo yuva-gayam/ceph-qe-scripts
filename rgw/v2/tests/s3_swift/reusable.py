@@ -193,8 +193,12 @@ def create_bucket(bucket_name, rgw, user_info, location=None, max_retries=5, ret
     
     for attempt in range(max_retries):
         try:
-            # Check if RGW service is running
-            if 'running' in subprocess.run(['ceph', 'orch', 'ls', '|', 'grep', 'rgw'], capture_output=True, text=True, check=True).stdout.lower():
+            # Check if RGW service is running using 'ceph orch ps'
+            result = subprocess.run(['ceph', 'orch', 'ps', '--format', 'json'], capture_output=True, text=True, check=True)
+            services = json.loads(result.stdout)
+            rgw_running = any(service.get('service_name', '').startswith('rgw') and service.get('status') == 'running' for service in services)
+            
+            if rgw_running:
                 bucket = s3lib.resource_op(
                     {"obj": rgw, "resource": "Bucket", "args": [bucket_name]}
                 )
@@ -234,17 +238,16 @@ def create_bucket(bucket_name, rgw, user_info, location=None, max_retries=5, ret
                 else:
                     raise TestExecError("bucket creation failed")
             
-            log.warning(f"RGW not running (attempt {attempt + 1}/{max_retries})")
+            log.warning(f"RGW service not running (attempt {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
                 time.sleep(retry_interval)
         
-        except subprocess.CalledProcessError:
-            log.error(f"RGW status check failed (attempt {attempt + 1}/{max_retries})")
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            log.error(f"Failed to check RGW status (attempt {attempt + 1}/{max_retries}): {str(e)}")
             if attempt < max_retries - 1:
                 time.sleep(retry_interval)
     
     raise TestExecError(f"Bucket creation failed because RGW service was down after {max_retries} retries")
-
 
 def create_bucket_sync_init(bucket_name, rgw, user_info, location=None):
     log.info("creating bucket with name: %s" % bucket_name)
