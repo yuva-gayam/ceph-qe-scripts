@@ -193,9 +193,9 @@ def create_bucket(bucket_name, rgw, user_info, location=None, max_retries=5, ret
     
     for attempt in range(max_retries):
         try:
-            # Check if RGW service is running using 'ceph orch ps'
-            result = subprocess.run(['ceph', 'orch', 'ps', '--format', 'json'], capture_output=True, text=True, check=True)
-            log.info(f"Raw ceph orch ps output: {result.stdout}")
+            # Check if RGW service is running using 'ceph orch ps --daemon_type=rgw'
+            result = subprocess.run(['ceph', 'orch', 'ps', '--daemon_type=rgw', '--format', 'json'], capture_output=True, text=True, check=True)
+            log.info(f"Raw ceph orch ps --daemon_type=rgw output: {result.stdout}")
             services = json.loads(result.stdout)
             
             rgw_running = False
