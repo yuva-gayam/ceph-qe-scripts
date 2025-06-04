@@ -258,7 +258,7 @@ def create_bucket(bucket_name, rgw, user_info, location=None, max_retries=5, ret
             if attempt < max_retries - 1:
                 time.sleep(retry_interval)
     
-    raise TestExecError(f"Bucket creation failed because RGW service was down after {max_retries} retries")
+    raise TestExecError(f"Bucket creation failed as RGW service was not up even after {max_retries} retries")
 
 def create_bucket_sync_init(bucket_name, rgw, user_info, location=None):
     log.info("creating bucket with name: %s" % bucket_name)
