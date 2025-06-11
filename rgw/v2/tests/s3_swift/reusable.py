@@ -222,8 +222,8 @@ def check_rgw_and_cluster_health(min_rgw_daemons=1, max_retries=5, retry_interva
             log.info(f"Raw ceph -s output: {ceph_status_result.stdout}")
             ceph_status = json.loads(ceph_status_result.stdout)
             
-            # Verify RGW daemon count in ceph -s matches running count
-            rgw_service = next((s for s in ceph_status.get('servicemap', {}).get('services', []) if s['type'] == 'rgw'), None)
+            # Access RGW service directly from servicemap.services
+            rgw_service = ceph_status.get('servicemap', {}).get('services', {}).get('rgw', None)
             ceph_rgw_daemons = rgw_service.get('daemons', {}).get('summary', '0 daemons') if rgw_service else '0 daemons'
             log.info(f"Ceph -s RGW daemon summary: {ceph_rgw_daemons}")
             
