@@ -187,7 +187,6 @@ def create_rgw_account_with_iam_user(
         json.dump(iam_user_details, fout)
     return iam_user_details
 
-
 def check_rgw_and_cluster_health(min_rgw_daemons=1, max_retries=5, retry_interval=15):
     """
     Check if RGW daemons are running and if the Ceph cluster is healthy.
@@ -306,7 +305,7 @@ def create_bucket(bucket_name, rgw, user_info, location=None, max_retries=5, ret
     
     except Exception as e:
         log.error(f"Bucket creation failed: {str(e)}")
-        raise TestExecError(f"Bucket creation failed: {str(e)}"){max_retries} retries")
+        raise TestExecError(f"Bucket creation failed: {str(e)} after {max_retries} retries")
 
 def create_bucket_sync_init(bucket_name, rgw, user_info, location=None):
     log.info("creating bucket with name: %s" % bucket_name)
