@@ -274,12 +274,13 @@ def create_bucket(bucket_name, rgw, user_info, location=None):
     Raises:
         TestExecError: If bucket creation or RGW daemon check fails.
     """
-    log.info(f"Creating bucket with name: {bucket_name}")
-
+    log.info(" checking if rgw deamons or up or not before creating a bucket")
     # Ensure all RGW daemons are running before bucket creation
     if not check_rgw_daemons_status():
+        log.error(" Bucket creation failed because of inconsistent or not running rgw daemons ")
         raise TestExecError("Cannot proceed with bucket creation due to RGW daemon issues")
 
+    log.info(f"Creating bucket with name: {bucket_name}")
     bucket = s3lib.resource_op(
         {"obj": rgw, "resource": "Bucket", "args": [bucket_name]}
     )
