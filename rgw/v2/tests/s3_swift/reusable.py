@@ -188,7 +188,7 @@ def create_rgw_account_with_iam_user(
         json.dump(iam_user_details, fout)
     return iam_user_details
 
-def check_rgw_daemons_status(retry_attempts=5, retry_delay=15):
+def check_rgw_daemons_status(retry_attempts=8, retry_delay=15):
     """
     Check if all RGW daemons are running using 'ceph orch ps' and 'ceph -s' with retry logic.
     
