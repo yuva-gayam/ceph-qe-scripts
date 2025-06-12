@@ -4,6 +4,7 @@ import os
 import random
 import subprocess
 import sys
+import re
 from datetime import datetime
 
 import boto3
@@ -230,7 +231,6 @@ def check_rgw_daemons_status(retry_attempts=5, retry_delay=15):
                 raise TestExecError("RGW service not found in ceph -s")
 
             # Extract the number of active RGW daemons from ceph -s (e.g., "4 daemons active")
-            import re
             match = re.search(r"(\d+)\s+daemons\s+active", rgw_line)
             if not match:
                 log.warning("Could not parse RGW daemon count from ceph -s")
