@@ -190,10 +190,10 @@ def create_rgw_account_with_iam_user(
 
 def check_rgw_daemons_status(retry_attempts=8, retry_delay=15):
     """
-    Check if all RGW daemons are running using 'ceph orch ps' and 'ceph -s' with retry logic.
+    Check if all RGW daemons are running using 'ceph orch ps', 'ceph orch ls', and 'ceph -s --format json' with retry logic.
     
     Args:
-        retry_attempts (int): Number of times to retry checking daemon status (default: 5).
+        retry_attempts (int): Number of times to retry checking daemon status (default: 8).
         retry_delay (int): Delay in seconds between retries (default: 15).
     
     Returns:
@@ -223,21 +223,21 @@ def check_rgw_daemons_status(retry_attempts=8, retry_delay=15):
             running_daemons_from_ls = orch_ls_output[0]["status"]["running"]
             log.info(f"Expected RGW daemons: {expected_daemons}, Running: {running_daemons_from_ls}")
 
-            # Step 3: Check RGW daemons via 'ceph -s'
-            ceph_s_output = utils.exec_shell_cmd("ceph -s")
-            rgw_line = next((line for line in ceph_s_output.split("\n") if "rgw:" in line), None)
-            if not rgw_line:
-                log.warning("RGW service not found in ceph -s output")
-                raise TestExecError("RGW service not found in ceph -s")
+            # Step 3: Check RGW daemons via 'ceph -s --format json' with jq
+            ceph_s_json_cmd = """ceph -s --format json | jq -r '
+                .servicemap.services.rgw.daemons 
+                | to_entries 
+                | map(select(.key != \\"summary\\")) 
+                | .[] 
+                | .value.metadata.id'"""
+            ceph_s_output = utils.exec_shell_cmd(ceph_s_json_cmd)
+            if not ceph_s_output:
+                log.warning("No RGW daemons found in ceph -s --format json output")
+                raise TestExecError("No RGW daemons found in ceph -s")
 
-            # Extract the number of active RGW daemons from ceph -s (e.g., "4 daemons active")
-            match = re.search(r"(\d+)\s+daemons\s+active", rgw_line)
-            if not match:
-                log.warning("Could not parse RGW daemon count from ceph -s")
-                raise TestExecError("Failed to parse RGW daemon count from ceph -s")
-            
-            ceph_s_daemons = int(match.group(1))
-            log.info(f"RGW daemons from ceph -s: {ceph_s_daemons}")
+            # Count unique RGW daemon IDs (each line is a daemon ID)
+            ceph_s_daemons = len(ceph_s_output.strip().split("\n"))
+            log.info(f"RGW daemons from ceph -s --format json: {ceph_s_daemons}")
 
             # Verify that the number of running daemons matches the expected count
             if running_daemons == expected_daemons and running_daemons_from_ls == expected_daemons and ceph_s_daemons == expected_daemons:
