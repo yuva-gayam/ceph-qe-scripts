@@ -187,7 +187,6 @@ def create_rgw_account_with_iam_user(
     with open(user_detail_file, "w") as fout:
         json.dump(iam_user_details, fout)
     return iam_user_details
-
 def check_rgw_daemons_status(retry_attempts=8, retry_delay=15):
     """
     Check if all RGW daemons are running using 'ceph orch ps', 'ceph orch ls', and 'ceph -s --format json' with retry logic.
@@ -200,7 +199,7 @@ def check_rgw_daemons_status(retry_attempts=8, retry_delay=15):
         bool: True if all RGW daemons are running and counts match, False otherwise.
     
     Raises:
-        TestExecError: If RGW daemons are not running after all retries.
+        TestExecError: If RGW daemons are not running after all retries or if command execution fails.
     """
     log.info("Checking RGW daemon status before bucket creation")
     
@@ -224,19 +223,19 @@ def check_rgw_daemons_status(retry_attempts=8, retry_delay=15):
             log.info(f"Expected RGW daemons: {expected_daemons}, Running: {running_daemons_from_ls}")
 
             # Step 3: Check RGW daemons via 'ceph -s --format json' with jq
-            ceph_s_json_cmd = """ceph -s --format json | jq -r '
-                .servicemap.services.rgw.daemons 
-                | to_entries 
-                | map(select(.key != \\"summary\\")) 
-                | .[] 
-                | .value.metadata.id'"""
-            ceph_s_output = utils.exec_shell_cmd(ceph_s_json_cmd)
-            if not ceph_s_output:
+            ceph_s_json_cmd = r"""ceph -s --format json | jq -r '.servicemap.services.rgw.daemons | to_entries | map(select(.key != "summary")) | .[] | .value.metadata.id'"""
+            try:
+                ceph_s_output = utils.exec_shell_cmd(ceph_s_json_cmd)
+            except Exception as e:
+                log.error(f"Failed to execute ceph -s command: {str(e)}")
+                raise TestExecError(f"ceph -s command failed: {str(e)}")
+
+            if not ceph_s_output or ceph_s_output.isspace():
                 log.warning("No RGW daemons found in ceph -s --format json output")
                 raise TestExecError("No RGW daemons found in ceph -s")
 
             # Count unique RGW daemon IDs (each line is a daemon ID)
-            ceph_s_daemons = len(ceph_s_output.strip().split("\n"))
+            ceph_s_daemons = len([line for line in ceph_s_output.strip().split("\n") if line.strip()])
             log.info(f"RGW daemons from ceph -s --format json: {ceph_s_daemons}")
 
             # Verify that the number of running daemons matches the expected count
