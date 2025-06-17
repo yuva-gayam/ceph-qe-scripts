@@ -4,7 +4,6 @@ import os
 import random
 import subprocess
 import sys
-import re
 from datetime import datetime
 
 import boto3
