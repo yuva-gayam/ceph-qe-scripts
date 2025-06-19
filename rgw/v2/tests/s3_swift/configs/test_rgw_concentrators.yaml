@@ -1,0 +1,7 @@
+config:
+  startup_timeout: 60
+  test_ops:
+    restart_haproxy: true
+    stop_haproxy: true
+    remove_concentrator: true
+    recovery: true
