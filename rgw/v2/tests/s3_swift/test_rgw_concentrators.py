@@ -7,10 +7,11 @@ Usage: test_rgw_concentrators.py -c <input_yaml>
     test_rgw_concentrators.yaml
 
 Operation:
-    Verify HAProxy and RGW service status
+    Discover pre-deployed RGW service and HAProxy details
+    Verify HAProxy and RGW status
     Test HAProxy restart and RGW access
     Test HAProxy stop and RGW inaccessibility
-    Test RGW service removal and reapplication
+    Test RGW service removal and restoration using exported spec
     Test RGW daemon failure and recovery
 """
 
@@ -22,6 +23,8 @@ import logging
 import traceback
 import subprocess
 import argparse
+import yaml
+import re
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "../../../..")))
 from v2.lib.exceptions import RGWBaseException, TestExecError
@@ -38,14 +41,19 @@ class RGWConcentratorTestError(RGWBaseException):
     """Custom exception for RGW concentrator test failures"""
     pass
 
-def run_ceph_command(ssh_con, cmd):
-    """Execute a Ceph command and return JSON output."""
+def run_ceph_command(ssh_con, cmd, json_output=True):
+    """Execute a Ceph command and return JSON or raw output."""
     try:
         if ssh_con:
             cmd = ["ssh", ssh_con.host, *cmd]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         log.info(f"Command {' '.join(cmd)} succeeded: {result.stdout}")
-        return json.loads(result.stdout) if result.stdout.strip() else {}
+        if json_output:
+            try:
+                return json.loads(result.stdout) if result.stdout.strip() else {}
+            except json.JSONDecodeError:
+                raise RGWConcentratorTestError(f"Invalid JSON output from command: {result.stdout}")
+        return result.stdout
     except subprocess.CalledProcessError as e:
         log.error(f"Command {' '.join(cmd)} failed: {e.stderr}")
         raise RGWConcentratorTestError(f"Ceph command failed: {e.stderr}")
@@ -112,111 +120,172 @@ def verify_haproxy_monitor(ssh_con, node, port, user, password):
         log.error(f"Failed to access HAProxy monitor on {node}: {e.stderr}")
         return False
 
+def get_rgw_service_details(ssh_con):
+    """Discover RGW service name and HAProxy nodes."""
+    services = run_ceph_command(ssh_con, ["ceph", "orch", "ls", "--format", "json"])
+    rgw_service = None
+    for service in services:
+        if service.get("service_type") == "rgw" and "haproxy" in service.get("spec", {}).get("concentrator", ""):
+            rgw_service = service.get("service_name")
+            break
+    if not rgw_service:
+        raise RGWConcentratorTestError("No RGW service with HAProxy concentrator found")
+
+    daemons = run_ceph_command(ssh_con, ["ceph", "orch", "ps", "--daemon_type", "haproxy", "--format", "json"])
+    haproxy_nodes = set(daemon.get("hostname") for daemon in daemons if daemon.get("daemon_id").startswith("haproxy"))
+    if not haproxy_nodes:
+        raise RGWConcentratorTestError("No HAProxy daemons found")
+
+    return rgw_service, list(haproxy_nodes)
+
+def get_haproxy_config(ssh_con, node):
+    """Fetch HAProxy frontend port, monitor port, and credentials."""
+    cmd = ["cat", "/etc/haproxy/haproxy.cfg"]
+    if ssh_con:
+        cmd = ["ssh", node, *cmd]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        config = result.stdout
+        frontend_port = 8080  # Default
+        monitor_port = 1967   # Default
+        monitor_user = "admin"
+        monitor_password = "nhmxtspt"  # From manual setup
+
+        # Parse frontend port
+        frontend_match = re.search(r'bind\s+.*:(\d+)', config)
+        if frontend_match:
+            frontend_port = int(frontend_match.group(1))
+
+        # Parse stats port and credentials
+        stats_match = re.search(r'stats\s+uri\s+/stats\s+stats\s+auth\s+(\w+):(\S+)', config)
+        if stats_match:
+            monitor_user, monitor_password = stats_match.groups()
+            stats_port_match = re.search(r'stats\s+enable\s+.*:(\d+)', config)
+            if stats_port_match:
+                monitor_port = int(stats_port_match.group(1))
+
+        return frontend_port, monitor_port, monitor_user, monitor_password
+    except subprocess.CalledProcessError as e:
+        log.warning(f"Failed to parse HAProxy config on {node}: {e.stderr}. Using defaults.")
+        return 8080, 1967, "admin", "nhmxtspt"
+
+def get_rgw_spec(ssh_con, service_name):
+    """Fetch the existing RGW service spec."""
+    spec_path = os.path.join(TEST_DATA_PATH, "rgw_spec.yaml")
+    cmd = ["ceph", "orch", "ls", "--service_name", service_name, "--export"]
+    spec_output = run_ceph_command(ssh_con, cmd, json_output=False)
+    try:
+        with open(spec_path, "w") as f:
+            f.write(spec_output)
+        log.info(f"RGW spec saved to {spec_path}")
+        return spec_path
+    except Exception as e:
+        raise RGWConcentratorTestError(f"Failed to save RGW spec: {e}")
+
 def test_exec(config, ssh_con):
-    """Execute RGW concentrator tests."""
+    """Execute RGW concentrator tests on pre-deployed setup."""
     rgw_service = RGWService()
-    haproxy_nodes = config.haproxy_nodes
-    rgw_service_name = config.rgw_service
-    frontend_port = config.frontend_port
-    monitor_port = config.monitor_port
-    monitor_user = config.monitor_user
-    monitor_password = config.monitor_password
     startup_timeout = config.startup_timeout
 
-    # Test 1: Restart HAProxy
-    log.info("Starting HAProxy restart test")
+    # Discover RGW service and HAProxy nodes
+    rgw_service_name, haproxy_nodes = get_rgw_service_details(ssh_con)
+    log.info(f"Discovered RGW service: {rgw_service_name}, HAProxy nodes: {haproxy_nodes}")
+
+    # Fetch HAProxy config from the first node
+    frontend_port, monitor_port, monitor_user, monitor_password = get_haproxy_config(ssh_con, haproxy_nodes[0])
+    log.info(f"HAProxy config: frontend_port={frontend_port}, monitor_port={monitor_port}, user={monitor_user}")
+
+    # Verify initial state
+    log.info("Verifying initial HAProxy and RGW status")
     for node in haproxy_nodes:
-        log.info(f"Restarting HAProxy on {node}")
-        cmd = ["systemctl", "restart", "haproxy"]
-        if ssh_con:
-            cmd = ["ssh", node, "sudo", *cmd]
-        subprocess.run(cmd, check=True)
-        time.sleep(5)
-        if not check_haproxy_status(ssh_con, node):
-            raise RGWConcentratorTestError(f"HAProxy failed to restart on {node}")
-        if not wait_for_daemon_running(ssh_con, "haproxy", "haproxy.foo", node, startup_timeout):
-            raise RGWConcentratorTestError(f"HAProxy daemon failed to stabilize on {node}")
+        if not wait_for_daemon_running(ssh_con, "haproxy", "haproxy", node, startup_timeout):
+            raise RGWConcentratorTestError(f"HAProxy daemon not running on {node}")
+        if not wait_for_daemon_running(ssh_con, "rgw", rgw_service_name, node, startup_timeout):
+            raise RGWConcentratorTestError(f"RGW daemon not running on {node}")
         verify_rgw_access(ssh_con, node, frontend_port)
         verify_haproxy_monitor(ssh_con, node, monitor_port, monitor_user, monitor_password)
+
+    # Test 1: Restart HAProxy
+    if config.test_ops["restart_haproxy"]:
+        log.info("Starting HAProxy restart test")
+        for node in haproxy_nodes:
+            log.info(f"Restarting HAProxy on {node}")
+            cmd = ["systemctl", "restart", "haproxy"]
+            if ssh_con:
+                cmd = ["ssh", node, "sudo", *cmd]
+            subprocess.run(cmd, check=True)
+            time.sleep(5)
+            if not check_haproxy_status(ssh_con, node):
+                raise RGWConcentratorTestError(f"HAProxy failed to restart on {node}")
+            if not wait_for_daemon_running(ssh_con, "haproxy", "haproxy", node, startup_timeout):
+                raise RGWConcentratorTestError(f"HAProxy daemon failed to stabilize on {node}")
+            verify_rgw_access(ssh_con, node, frontend_port)
+            verify_haproxy_monitor(ssh_con, node, monitor_port, monitor_user, monitor_password)
 
     # Test 2: Stop HAProxy
-    log.info("Starting HAProxy stop test")
-    for node in haproxy_nodes:
-        log.info(f"Stopping HAProxy on {node}")
-        cmd = ["systemctl", "stop", "haproxy"]
-        if ssh_con:
-            cmd = ["ssh", node, "sudo", *cmd]
-        subprocess.run(cmd, check=True)
-        time.sleep(5)
-        if check_haproxy_status(ssh_con, node):
-            raise RGWConcentratorTestError(f"HAProxy still running on {node}")
-    verify_rgw_access(ssh_con, haproxy_nodes[0], frontend_port, expect_failure=True)
-    # Recover by restarting HAProxy
-    for node in haproxy_nodes:
-        log.info(f"Starting HAProxy on {node}")
-        cmd = ["systemctl", "start", "haproxy"]
-        if ssh_con:
-            cmd = ["ssh", node, "sudo", *cmd]
-        subprocess.run(cmd, check=True)
-        time.sleep(5)
-        if not check_haproxy_status(ssh_con, node):
-            raise RGWConcentratorTestError(f"HAProxy failed to start on {node}")
-        if not wait_for_daemon_running(ssh_con, "haproxy", "haproxy.foo", node, startup_timeout):
-            raise RGWConcentratorTestError(f"HAProxy daemon failed to stabilize on {node}")
-    verify_rgw_access(ssh_con, haproxy_nodes[0], frontend_port)
-    verify_haproxy_monitor(ssh_con, haproxy_nodes[0], monitor_port, monitor_user, monitor_password)
+    if config.test_ops["stop_haproxy"]:
+        log.info("Starting HAProxy stop test")
+        for node in haproxy_nodes:
+            log.info(f"Stopping HAProxy on {node}")
+            cmd = ["systemctl", "stop", "haproxy"]
+            if ssh_con:
+                cmd = ["ssh", node, "sudo", *cmd]
+            subprocess.run(cmd, check=True)
+            time.sleep(5)
+            if check_haproxy_status(ssh_con, node):
+                raise RGWConcentratorTestError(f"HAProxy still running on {node}")
+        verify_rgw_access(ssh_con, haproxy_nodes[0], frontend_port, expect_failure=True)
+        # Recover by restarting HAProxy
+        for node in haproxy_nodes:
+            log.info(f"Starting HAProxy on {node}")
+            cmd = ["systemctl", "start", "haproxy"]
+            if ssh_con:
+                cmd = ["ssh", node, "sudo", *cmd]
+            subprocess.run(cmd, check=True)
+            time.sleep(5)
+            if not check_haproxy_status(ssh_con, node):
+                raise RGWConcentratorTestError(f"HAProxy failed to start on {node}")
+            if not wait_for_daemon_running(ssh_con, "haproxy", "haproxy", node, startup_timeout):
+                raise RGWConcentratorTestError(f"HAProxy daemon failed to stabilize on {node}")
+        verify_rgw_access(ssh_con, haproxy_nodes[0], frontend_port)
+        verify_haproxy_monitor(ssh_con, haproxy_nodes[0], monitor_port, monitor_user, monitor_password)
 
     # Test 3: Remove and reapply RGW service
-    log.info("Starting RGW service remove test")
-    run_ceph_command(ssh_con, ["ceph", "orch", "rm", rgw_service_name])
-    time.sleep(10)
-    verify_rgw_access(ssh_con, haproxy_nodes[0], frontend_port, expect_failure=True)
-    # Reapply RGW service
-    spec = {
-        "service_type": "rgw",
-        "service_id": "foo",
-        "service_name": rgw_service_name,
-        "placement": {
-            "count_per_host": config.rgw_count_per_host,
-            "nodes": haproxy_nodes
-        },
-        "spec": {
-            "concentrator": "haproxy",
-            "concentrator_frontend_port": frontend_port,
-            "concentrator_monitor_port": monitor_port,
-            "concentrator_monitor_user": monitor_user
-        }
-    }
-    spec_path = os.path.join(TEST_DATA_PATH, "rgw_spec.yaml")
-    with open(spec_path, "w") as f:
-        json.dump(spec, f)
-    run_ceph_command(ssh_con, ["ceph", "orch", "apply", "-i", spec_path])
-    for node in haproxy_nodes:
-        if not wait_for_daemon_running(ssh_con, "rgw", rgw_service_name, node, startup_timeout):
-            raise RGWConcentratorTestError(f"RGW daemon failed to stabilize on {node}")
-        if not wait_for_daemon_running(ssh_con, "haproxy", "haproxy.foo", node, startup_timeout):
-            raise RGWConcentratorTestError(f"HAProxy daemon failed to stabilize on {node}")
-    verify_rgw_access(ssh_con, haproxy_nodes[0], frontend_port)
-    verify_haproxy_monitor(ssh_con, haproxy_nodes[0], monitor_port, monitor_user, monitor_password)
+    if config.test_ops["remove_concentrator"]:
+        log.info("Starting RGW service remove test")
+        run_ceph_command(ssh_con, ["ceph", "orch", "rm", rgw_service_name])
+        time.sleep(10)
+        verify_rgw_access(ssh_con, haproxy_nodes[0], frontend_port, expect_failure=True)
+        # Reapply RGW service using exported spec
+        spec_path = get_rgw_spec(ssh_con, rgw_service_name)
+        run_ceph_command(ssh_con, ["ceph", "orch", "apply", "-i", spec_path])
+        for node in haproxy_nodes:
+            if not wait_for_daemon_running(ssh_con, "rgw", rgw_service_name, node, startup_timeout):
+                raise RGWConcentratorTestError(f"RGW daemon failed to stabilize on {node}")
+            if not wait_for_daemon_running(ssh_con, "haproxy", "haproxy", node, startup_timeout):
+                raise RGWConcentratorTestError(f"HAProxy daemon failed to stabilize on {node}")
+        verify_rgw_access(ssh_con, haproxy_nodes[0], frontend_port)
+        verify_haproxy_monitor(ssh_con, haproxy_nodes[0], monitor_port, monitor_user, monitor_password)
 
     # Test 4: RGW daemon recovery
-    log.info("Starting RGW recovery test")
-    for node in haproxy_nodes:
-        rgw_daemons = run_ceph_command(ssh_con, ["ceph", "orch", "ps", "--daemon_type", "rgw", "--format", "json"])
-        target_daemon = next((d for d in rgw_daemons if d["hostname"] == node and rgw_service_name in d["daemon_id"]), None)
-        if not target_daemon:
-            raise RGWConcentratorTestError(f"No RGW daemon found for {rgw_service_name} on {node}")
-        daemon_id = target_daemon["daemon_id"]
-        log.info(f"Stopping RGW daemon {daemon_id} on {node}")
-        run_ceph_command(ssh_con, ["ceph", "orch", "daemon", "stop", daemon_id])
-        time.sleep(5)
-        verify_rgw_access(ssh_con, node, frontend_port)  # HAProxy should route to other daemons
-        log.info(f"Restarting RGW daemon {daemon_id} on {node}")
-        run_ceph_command(ssh_con, ["ceph", "orch", "daemon", "start", daemon_id])
-        if not wait_for_daemon_running(ssh_con, "rgw", rgw_service_name, node, startup_timeout):
-            raise RGWConcentratorTestError(f"RGW daemon {daemon_id} failed to stabilize on {node}")
-        verify_rgw_access(ssh_con, node, frontend_port)
-        verify_haproxy_monitor(ssh_con, node, monitor_port, monitor_user, monitor_password)
+    if config.test_ops["recovery"]:
+        log.info("Starting RGW recovery test")
+        for node in haproxy_nodes:
+            rgw_daemons = run_ceph_command(ssh_con, ["ceph", "orch", "ps", "--daemon_type", "rgw", "--format", "json"])
+            target_daemon = next((d for d in rgw_daemons if d["hostname"] == node and rgw_service_name in d["daemon_id"]), None)
+            if not target_daemon:
+                raise RGWConcentratorTestError(f"No RGW daemon found for {rgw_service_name} on {node}")
+            daemon_id = target_daemon["daemon_id"]
+            log.info(f"Stopping RGW daemon {daemon_id} on {node}")
+            run_ceph_command(ssh_con, ["ceph", "orch", "daemon", "stop", daemon_id])
+            time.sleep(5)
+            verify_rgw_access(ssh_con, node, frontend_port)  # HAProxy should route to other daemons
+            log.info(f"Restarting RGW daemon {daemon_id} on {node}")
+            run_ceph_command(ssh_con, ["ceph", "orch", "daemon", "start", daemon_id])
+            if not wait_for_daemon_running(ssh_con, "rgw", rgw_service_name, node, startup_timeout):
+                raise RGWConcentratorTestError(f"RGW daemon {daemon_id} failed to stabilize on {node}")
+            verify_rgw_access(ssh_con, node, frontend_port)
+            verify_haproxy_monitor(ssh_con, node, monitor_port, monitor_user, monitor_password)
 
     # Check for crashes
     crash_info = reusable.check_for_crash()
@@ -230,6 +299,7 @@ if __name__ == "__main__":
     try:
         project_dir = os.path.abspath(os.path.join(__file__, "../../.."))
         test_data_dir = "test_data"
+        global TEST_DATA_PATH
         TEST_DATA_PATH = os.path.join(project_dir, test_data_dir)
         log.info(f"TEST_DATA_PATH: {TEST_DATA_PATH}")
         if not os.path.exists(TEST_DATA_PATH):
