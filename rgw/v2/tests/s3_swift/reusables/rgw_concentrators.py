@@ -179,7 +179,7 @@ def test_rgw_concentrator_behavior(config, ssh_con, rgw_node):
             time.sleep(0.1)  # Small delay to avoid overwhelming the server
         
         # Check HAProxy stats before restart
-        rgw_hits_before = {}
+        rgw_request_count_before = {}
         stats_url = f"http://{host}:{monitor_port}/stats;csv"
         stats_cmd = f"curl -s -u {monitor_user}:{monitor_password} \"{stats_url}\" | awk -F',' 'NR==1 || /^backend|^frontend|^stats/' | cut -d',' -f1,2,5,8,9,10,18,35,73 | column -s',' -t"
         log.info(f"Executing HAProxy stats command: {stats_cmd}")
@@ -189,8 +189,8 @@ def test_rgw_concentrator_behavior(config, ssh_con, rgw_node):
         if stats_output and not stats_output.startswith("<!DOCTYPE"):
             log.info(f"HAProxy stats before restart (formatted):\n{stats_output}")
             if raw_stats_output:
-                rgw_hits_before = parse_haproxy_stats(raw_stats_output, service_name)
-                log.info(f"HAProxy stats before restart (parsed): {rgw_hits_before}")
+                rgw_request_count_before = parse_haproxy_stats(raw_stats_output, service_name)
+                log.info(f"HAProxy stats before restart (parsed): {rgw_request_count_before}")
             else:
                 log.warning("Failed to retrieve raw HAProxy stats before restart")
         else:
@@ -255,15 +255,15 @@ def test_rgw_concentrator_behavior(config, ssh_con, rgw_node):
             time.sleep(0.1)
         
         # Check HAProxy stats after restart
-        rgw_hits_after = {}
+        rgw_request_count_after = {}
         log.info(f"Executing HAProxy stats command: {stats_cmd}")
         stats_output = utils.exec_shell_cmd(stats_cmd)
         raw_stats_output = utils.exec_shell_cmd(raw_stats_cmd)
         if stats_output and not stats_output.startswith("<!DOCTYPE"):
             log.info(f"HAProxy stats after restart (formatted):\n{stats_output}")
             if raw_stats_output:
-                rgw_hits_after = parse_haproxy_stats(raw_stats_output, service_name)
-                log.info(f"HAProxy stats after restart (parsed): {rgw_hits_after}")
+                rgw_request_count_after = parse_haproxy_stats(raw_stats_output, service_name)
+                log.info(f"HAProxy stats after restart (parsed): {rgw_request_count_after}")
             else:
                 log.warning("Failed to retrieve raw HAProxy stats after restart")
         else:
@@ -272,17 +272,17 @@ def test_rgw_concentrator_behavior(config, ssh_con, rgw_node):
         
         # Verify traffic distribution
         expected_rgw_count = len(expected_ports)
-        if rgw_hits_after:
-            total_hits = sum(rgw_hits_after.values())
-            if total_hits < num_requests * 0.5:  # Allow some requests to fail
-                raise TestExecError(f"Too few successful requests: {total_hits} out of {num_requests}")
-            if len(rgw_hits_after) != expected_rgw_count:
-                raise TestExecError(f"Traffic not distributed to all {expected_rgw_count} RGW instances: {rgw_hits_after}")
+        if rgw_request_count_after:
+            total_rgw_requests = sum(rgw_request_count_after.values())
+            if total_rgw_requests < num_requests * 0.5:  # Allow some requests to fail
+                raise TestExecError(f"Too few successful requests: {total_rgw_requests} out of {num_requests}")
+            if len(rgw_request_count_after) != expected_rgw_count:
+                raise TestExecError(f"Traffic not distributed to all {expected_rgw_count} RGW instances: {rgw_request_count_after}")
             # Check for roughly even distribution (within 20% deviation)
-            avg_hits = total_hits / expected_rgw_count
-            for rgw, hits in rgw_hits_after.items():
-                if abs(hits - avg_hits) > 0.2 * avg_hits:
-                    log.warning(f"Uneven traffic distribution for {rgw}: {hits} hits (expected ~{avg_hits})")
+            average_rgw_requests = total_rgw_requests / expected_rgw_count
+            for rgw, rgw_requests in rgw_request_count_after.items():
+                if abs(rgw_requests - average_rgw_requests) > 0.2 * average_rgw_requests:
+                    log.warning(f"Uneven traffic distribution for {rgw}: {rgw_requests} rgw_requests (expected ~{average_rgw_requests})")
         else:
             # Fallback: Verify RGW ports are accessible directly
             log.info(f"Fallback: Testing direct access to RGW ports {expected_ports} on {host}")
@@ -301,7 +301,7 @@ def test_rgw_concentrator_behavior(config, ssh_con, rgw_node):
         if successful_requests_after < num_requests * 0.5:
             raise TestExecError(f"Too few successful requests after restart: {successful_requests_after} out of {num_requests}")
         
-        log.info(f"RGW and HAProxy services restarted successfully. RGW ports: {rgw_ports}, Traffic distribution: {rgw_hits_after or 'verified via fallback'}")
+        log.info(f"RGW and HAProxy services restarted successfully. RGW ports: {rgw_ports}, Traffic distribution: {rgw_request_count_after or 'verified via fallback'}")
         return True
     
     except json.JSONDecodeError:
@@ -379,13 +379,13 @@ def test_single_rgw_stop(config, ssh_con, rgw_node):
         baseline_formatted_stats_output = utils.exec_shell_cmd(formatted_stats_cmd) # Get formatted data for logging
         
         # Process baseline stats
-        baseline_hits = {} # Initialize to empty dict
+        initial_rgw_requests = {} # Initialize to empty dict
         # Corrected condition: use baseline_formatted_stats_output here
         if baseline_formatted_stats_output and not baseline_formatted_stats_output.startswith("<!DOCTYPE"):
             log.info(f"Baseline HAProxy stats (formatted):\n{baseline_formatted_stats_output}")
             if baseline_raw_stats_output: # Check if raw data was retrieved
-                baseline_hits = parse_haproxy_stats(baseline_raw_stats_output, service_name)
-                log.info(f"Baseline HAProxy stats (parsed): {baseline_hits}")
+                initial_rgw_requests = parse_haproxy_stats(baseline_raw_stats_output, service_name)
+                log.info(f"Baseline HAProxy stats (parsed): {initial_rgw_requests}")
             else:
                 log.warning("Failed to retrieve raw HAProxy stats for baseline parsing.")
         else:
@@ -432,13 +432,13 @@ def test_single_rgw_stop(config, ssh_con, rgw_node):
         stats_after_stop_formatted = utils.exec_shell_cmd(formatted_stats_cmd) # Get formatted data
         stats_after_stop_raw = utils.exec_shell_cmd(raw_stats_cmd) # Get raw data for parsing
 
-        rgw_hits_after_stop = {} # Initialize
+        rgw_request_count_after_stop = {} # Initialize
         # Corrected condition: use stats_after_stop_formatted here
         if stats_after_stop_formatted and not stats_after_stop_formatted.startswith("<!DOCTYPE"):
             log.info(f"HAProxy stats after stopping {rgw_to_stop} (formatted):\n{stats_after_stop_formatted}")
             if stats_after_stop_raw: # Check if raw data was retrieved
-                rgw_hits_after_stop = parse_haproxy_stats(stats_after_stop_raw, service_name)
-                log.info(f"HAProxy stats after stopping {rgw_to_stop} (parsed): {rgw_hits_after_stop}")
+                rgw_request_count_after_stop = parse_haproxy_stats(stats_after_stop_raw, service_name)
+                log.info(f"HAProxy stats after stopping {rgw_to_stop} (parsed): {rgw_request_count_after_stop}")
             else:
                 log.warning("Failed to retrieve raw HAProxy stats after stopping RGW.")
                 raise TestExecError("Failed to retrieve raw HAProxy stats after stopping RGW for analysis.")
@@ -447,45 +447,34 @@ def test_single_rgw_stop(config, ssh_con, rgw_node):
             raise TestExecError("Failed to retrieve HAProxy stats after stopping RGW.")
         
         # Verify traffic distribution
-        if rgw_hits_after_stop:
-            total_hits = sum(rgw_hits_after_stop.values())
-            if total_hits < num_requests * 0.5:
-                raise TestExecError(f"Too few successful requests after stopping {rgw_to_stop}: {total_hits} out of {num_requests}")
+        if rgw_request_count_after_stop:
+            total_rgw_requests = sum(rgw_request_count_after_stop.values())
+            if total_rgw_requests < num_requests * 0.5:
+                raise TestExecError(f"Too few successful requests after stopping {rgw_to_stop}: {total_rgw_requests} out of {num_requests}")
             
-            # This check needs to be careful: if baseline_hits or rgw_hits_after_stop are empty,
-            # this logic might not fully apply. Assuming they'll have data if HAProxy is working.
-            # Modified to ensure baseline_hits.get doesn't raise error if baseline_hits is empty.
-            if rgw_to_stop in rgw_hits_after_stop and rgw_hits_after_stop[rgw_to_stop] > baseline_hits.get(rgw_to_stop, 0):
-                # Ensure we are comparing 'new' hits with 'baseline' hits for the *stopped* instance.
-                # If traffic was successfully rerouted, the stopped instance's hit count should not increase significantly.
-                # It's better to check if the stopped instance is NOT in rgw_hits_after_stop's keys,
-                # or if its hits are very low (e.g., 0 or very close to baseline for pre-stop hits only).
-                log.error(f"Traffic unexpectedly sent to stopped RGW instance {rgw_to_stop}: {rgw_hits_after_stop[rgw_to_stop]} hits. Baseline: {baseline_hits.get(rgw_to_stop, 'N/A')}")
+            if rgw_to_stop in rgw_request_count_after_stop and rgw_request_count_after_stop[rgw_to_stop] > initial_rgw_requests.get(rgw_to_stop, 0):
+                log.error(f"Traffic unexpectedly sent to stopped RGW instance {rgw_to_stop}: {rgw_request_count_after_stop[rgw_to_stop]} rgw_requests. Baseline: {initial_rgw_requests.get(rgw_to_stop, 'N/A')}")
                 raise TestExecError(f"Traffic sent to stopped RGW instance {rgw_to_stop}.")
 
             # Ensure traffic is rerouted to remaining instances
-            # Collect the names of RGW instances that are expected to be running.
             expected_running_rgw_daemons = [s.get('daemon_name') for s in rgw_services if s.get('daemon_name') != rgw_to_stop]
 
-            if not all(daemon in rgw_hits_after_stop for daemon in expected_running_rgw_daemons):
-                log.error(f"Traffic not routed to all expected running RGW instances. Expected: {expected_running_rgw_daemons}, Actual hit instances: {list(rgw_hits_after_stop.keys())}")
+            if not all(daemon in rgw_request_count_after_stop for daemon in expected_running_rgw_daemons):
+                log.error(f"Traffic not routed to all expected running RGW instances. Expected: {expected_running_rgw_daemons}, Actual hit instances: {list(rgw_request_count_after_stop.keys())}")
                 raise TestExecError(f"Traffic not routed to all remaining RGW instances after stopping {rgw_to_stop}.")
             
-            # Optional: Check for roughly even distribution among remaining (if more than one)
             if len(expected_running_rgw_daemons) > 1:
-                hits_on_running_instances = [rgw_hits_after_stop.get(daemon, 0) for daemon in expected_running_rgw_daemons]
-                if sum(hits_on_running_instances) > 0: # Only check distribution if there was actual traffic
-                    avg_hits_remaining = sum(hits_on_running_instances) / len(expected_running_rgw_daemons)
+                rgw_requests_on_running_instances = [rgw_request_count_after_stop.get(daemon, 0) for daemon in expected_running_rgw_daemons]
+                if sum(rgw_requests_on_running_instances) > 0: # Only check distribution if there was actual traffic
+                    average_rgw_requests_remaining = sum(rgw_requests_on_running_instances) / len(expected_running_rgw_daemons)
                     for daemon_name in expected_running_rgw_daemons:
-                        hits = rgw_hits_after_stop.get(daemon_name, 0)
-                        if abs(hits - avg_hits_remaining) > 0.2 * avg_hits_remaining: # 20% deviation
-                            log.warning(f"Uneven traffic distribution for {daemon_name} after stop: {hits} hits (expected ~{avg_hits_remaining})")
+                        rgw_requests = rgw_request_count_after_stop.get(daemon_name, 0)
+                        if abs(rgw_requests - average_rgw_requests_remaining) > 0.2 * average_rgw_requests_remaining: # 20% deviation
+                            log.warning(f"Uneven traffic distribution for {daemon_name} after stop: {rgw_requests} rgw_requests (expected ~{average_rgw_requests_remaining})")
         else:
-            log.warning("No RGW hits recorded after stopping instance, or parsing failed. Cannot verify traffic distribution.")
-            # Depending on expected behavior, this might be an error or acceptable.
-            # If some traffic is *expected* to pass, raise an error.
-            if successful_requests > 0: # If there were successful requests, but no hits recorded, something is wrong
-                raise TestExecError("Successful requests observed but no HAProxy hits recorded for RGW instances after stopping one.")
+            log.warning("No RGW rgw_requests recorded after stopping instance, or parsing failed. Cannot verify traffic distribution.")
+            if successful_requests > 0: # If there were successful requests, but no rgw_requests recorded, something is wrong
+                raise TestExecError("Successful requests observed but no HAProxy rgw_requests recorded for RGW instances after stopping one.")
             
         # Verify sufficient successful requests
         if successful_requests < num_requests * 0.5:
@@ -514,7 +503,7 @@ def test_single_rgw_stop(config, ssh_con, rgw_node):
             if service.get('status_desc') != 'running':
                 raise TestExecError(f"Service {service.get('daemon_name')} is not running after restart: {service.get('status_desc')}")
         
-        log.info(f"RGW instance {rgw_to_stop} stopped and restarted successfully. Traffic distribution: {rgw_hits_after_stop}")
+        log.info(f"RGW instance {rgw_to_stop} stopped and restarted successfully. Traffic distribution: {rgw_request_count_after_stop}")
         return True
     
     except json.JSONDecodeError as e:
@@ -594,13 +583,13 @@ def test_haproxy_stop(config, ssh_con, rgw_node):
         baseline_formatted_stats_output = utils.exec_shell_cmd(formatted_stats_cmd) # Get formatted data for logging
         
         # Process baseline stats
-        baseline_hits = {} # Initialize to empty dict
+        initial_rgw_requests = {} # Initialize to empty dict
         if baseline_formatted_stats_output and not baseline_formatted_stats_output.startswith("<!DOCTYPE"):
             log.info(f"Baseline HAProxy stats (formatted):\n{baseline_formatted_stats_output}")
             if baseline_raw_stats_output:
                 # FIX: Changed parse_hierarchy_stats to parse_haproxy_stats
-                baseline_hits = parse_haproxy_stats(baseline_raw_stats_output, service_name)
-                log.info(f"Baseline HAProxy stats (parsed): {baseline_hits}")
+                initial_rgw_requests = parse_haproxy_stats(baseline_raw_stats_output, service_name)
+                log.info(f"Baseline HAProxy stats (parsed): {initial_rgw_requests}")
             else:
                 log.warning("Failed to retrieve raw HAProxy stats for baseline parsing.")
         else:
@@ -650,15 +639,12 @@ def test_haproxy_stop(config, ssh_con, rgw_node):
             raise TestExecError(f"Unexpected successful requests with HAProxy stopped: {successful_requests} out of {num_requests}")
         
         # Attempt to check HAProxy stats (expect failure)
-        # Use specific variable names for clarity (stats_after_stop_formatted / raw)
         stats_after_stop_formatted = utils.exec_shell_cmd(formatted_stats_cmd)
         stats_after_stop_raw = utils.exec_shell_cmd(raw_stats_cmd)
 
         if stats_after_stop_formatted and not stats_after_stop_formatted.startswith("<!DOCTYPE"):
             log.warning(f"Unexpected HAProxy stats retrieved while {haproxy_to_stop} stopped:\n{stats_after_stop_formatted}")
             # If stats are unexpectedly available, it means HAProxy didn't truly stop or monitor is on another instance
-            # which is still running. You might want to fail the test here.
-            # For now, just a warning, but for a critical test, this should likely be a failure.
             # raise TestExecError(f"HAProxy stats unexpectedly available while {haproxy_to_stop} stopped.")
         else:
             log.info(f"HAProxy stats unavailable as expected while {haproxy_to_stop} stopped")
@@ -715,8 +701,8 @@ def test_haproxy_stop(config, ssh_con, rgw_node):
             log.info(f"HAProxy stats after restarting {haproxy_to_stop} (formatted):\n{stats_after_restart_formatted}")
             if stats_after_restart_raw:
                 # FIX: Changed parse_hierarchy_stats to parse_haproxy_stats
-                rgw_hits_after_restart = parse_haproxy_stats(stats_after_restart_raw, service_name)
-                log.info(f"HAProxy stats after restarting {haproxy_to_stop} (parsed): {rgw_hits_after_restart}")
+                rgw_request_count_after_restart = parse_haproxy_stats(stats_after_restart_raw, service_name)
+                log.info(f"HAProxy stats after restarting {haproxy_to_stop} (parsed): {rgw_request_count_after_restart}")
             else:
                 log.warning("Failed to retrieve raw HAProxy stats after restarting HAProxy")
         else:
@@ -786,8 +772,8 @@ def test_haproxy_restart(config, ssh_con, rgw_node):
         stats_cmd = f"curl -s -u {monitor_user}:{monitor_password} \"{stats_url}\" | awk -F',' 'NR==1 || /^backend|^frontend|^stats/' | cut -d',' -f1,2,5,8,9,10,18,35,73 | column -s',' -t"
         raw_stats_cmd = f"curl -s -u {monitor_user}:{monitor_password} \"{stats_url}\""
         baseline_stats = utils.exec_shell_cmd(raw_stats_cmd)
-        baseline_hits = parse_haproxy_stats(baseline_stats, service_name) if baseline_stats else {}
-        log.info(f"Baseline HAProxy stats (parsed): {baseline_hits}")
+        initial_rgw_requests = parse_haproxy_stats(baseline_stats, service_name) if baseline_stats else {}
+        log.info(f"Baseline HAProxy stats (parsed): {initial_rgw_requests}")
         formatted_stats = utils.exec_shell_cmd(stats_cmd)
         if formatted_stats and not formatted_stats.startswith("<!DOCTYPE"):
             log.info(f"Baseline HAProxy stats (formatted):\n{formatted_stats}")
@@ -846,8 +832,8 @@ def test_haproxy_restart(config, ssh_con, rgw_node):
         if stats_output and not stats_output.startswith("<!DOCTYPE"):
             log.info(f"HAProxy stats after restarting {haproxy_to_restart} (formatted):\n{stats_output}")
             if raw_stats_output:
-                rgw_hits_after_restart = parse_haproxy_stats(raw_stats_output, service_name)
-                log.info(f"HAProxy stats after restarting {haproxy_to_restart} (parsed): {rgw_hits_after_restart}")
+                rgw_request_count_after_restart = parse_haproxy_stats(raw_stats_output, service_name)
+                log.info(f"HAProxy stats after restarting {haproxy_to_restart} (parsed): {rgw_request_count_after_restart}")
             else:
                 log.warning("Failed to retrieve raw HAProxy stats after restarting HAProxy")
         else:
@@ -856,18 +842,18 @@ def test_haproxy_restart(config, ssh_con, rgw_node):
         
         # Verify even traffic distribution
         expected_rgw_count = len(rgw_services)
-        if rgw_hits_after_restart:
-            total_hits = sum(rgw_hits_after_restart.values())
-            if total_hits < successful_requests * 0.5:
-                raise TestExecError(f"Too few hits recorded in HAProxy stats: {total_hits} for {successful_requests} successful requests")
-            if len(rgw_hits_after_restart) != expected_rgw_count:
-                raise TestExecError(f"Traffic not distributed to all {expected_rgw_count} RGW instances: {rgw_hits_after_restart}")
-            avg_hits = total_hits / expected_rgw_count
-            for rgw, hits in rgw_hits_after_restart.items():
-                if abs(hits - avg_hits) > 0.2 * avg_hits:
-                    log.warning(f"Uneven traffic distribution for {rgw}: {hits} hits (expected ~{avg_hits})")
+        if rgw_request_count_after_restart:
+            total_rgw_requests = sum(rgw_request_count_after_restart.values())
+            if total_rgw_requests < successful_requests * 0.5:
+                raise TestExecError(f"Too few rgw_requests recorded in HAProxy stats: {total_rgw_requests} for {successful_requests} successful requests")
+            if len(rgw_request_count_after_restart) != expected_rgw_count:
+                raise TestExecError(f"Traffic not distributed to all {expected_rgw_count} RGW instances: {rgw_request_count_after_restart}")
+            average_rgw_requests = total_rgw_requests / expected_rgw_count
+            for rgw, rgw_requests in rgw_request_count_after_restart.items():
+                if abs(rgw_requests - average_rgw_requests) > 0.2 * average_rgw_requests:
+                    log.warning(f"Uneven traffic distribution for {rgw}: {rgw_requests} rgw_requests (expected ~{average_rgw_requests})")
         
-        log.info(f"HAProxy instance {haproxy_to_restart} restarted successfully during traffic. Traffic resumed with even distribution: {rgw_hits_after_restart}")
+        log.info(f"HAProxy instance {haproxy_to_restart} restarted successfully during traffic. Traffic resumed with even distribution: {rgw_request_count_after_restart}")
         return True
     
     except json.JSONDecodeError:
@@ -991,17 +977,17 @@ def test_rgw_service_removal(config, ssh_con, rgw_node):
 
 def parse_haproxy_stats(stats_output, service_name):
     """Parse HAProxy stats CSV to count requests per RGW backend"""
-    rgw_hits = {}
+    rgw_rgw_requests = {}
     lines = stats_output.splitlines()
     for line in lines:
         fields = line.split(',')
         if len(fields) > 7 and fields[0] == 'backend' and service_name in fields[1]:
-            backend_name = fields[1]  # Backend or server name
+            backend_name = fields[1] 
             if backend_name.startswith('rgw.'):
                 try:
-                    hits = int(fields[7])  # Use 'stot' (cumulative sessions)
-                    if hits > 0:
-                        rgw_hits[backend_name] = hits
+                    rgw_requests = int(fields[7])
+                    if rgw_requests > 0:
+                        rgw_rgw_requests[backend_name] = rgw_requests
                 except (ValueError, IndexError):
                     continue
-    return rgw_hits
+    return rgw_rgw_requests
