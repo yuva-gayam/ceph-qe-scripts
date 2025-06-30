@@ -80,9 +80,9 @@ def get_haproxy_monitor_password(ssh_con, rgw_node):
     except Exception as e:
         log.error(f"An unexpected error occurred while fetching HAProxy monitor password from {rgw_node}: {str(e)}")
         raise TestExecError(f"Unable to retrieve HAProxy monitor password due to unexpected error: {str(e)}")
-def test_rgw_high_traffic(config, ssh_con, rgw_node):
-    """Send high traffic to RGW via HAProxy with 20 buckets and 100 objects each, monitor even distribution."""
-    log.info("Testing high traffic to RGW via HAProxy with 20 buckets and 100 objects each")
+def test_Mbuckets_with_Nobjects(ssh_con, rgw_node, config_dict):
+    """Send traffic to RGW via HAProxy with buckets and objects from config, monitor even distribution."""
+    log.info("Testing RGW with M buckets and N objects")
     try:
         # Get HAProxy monitor password
         monitor_password = get_haproxy_monitor_password(ssh_con, rgw_node)
@@ -112,18 +112,24 @@ def test_rgw_high_traffic(config, ssh_con, rgw_node):
         monitor_user = rgw_service_info.get('spec', {}).get('concentrator_monitor_user', 'admin')
         
         # Create RGW user
-        user_info = s3lib.create_users(1)[0]
+        user_info = s3lib.create_users(config_dict.get("user_count", 1))[0]
         log.info(f"Created user: {user_info['user_id']}")
         
         # Authenticate with RGW through HAProxy frontend
         rgw_endpoint = f"http://{host}:{frontend_port}"
-        auth = Auth(user_info, ssh_con, ssl=config.ssl, haproxy=True)
+        auth = Auth(user_info, ssh_con, ssl=False, haproxy=True)
         rgw_conn = auth.do_auth(endpoint_url=rgw_endpoint)
         
-        # Configuration for buckets and objects
-        config.bucket_count = 20
-        config.objects_count = 100
-        config.mapped_sizes = {i: 1 for i in range(config.objects_count)}  # 1 byte per object
+        # Extract configuration
+        bucket_count = config_dict.get("bucket_count", 1)
+        objects_count = config_dict.get("objects_count", 5)
+        test_data_path = config_dict.get("test_data_path", "/tmp/test_data")
+        objects_size_range = config_dict.get("objects_size_range", {"min": 5, "max": 15})
+        test_ops = config_dict.get("test_ops", {})
+        
+        # Ensure test data directory exists
+        if not os.path.exists(test_data_path):
+            os.makedirs(test_data_path)
         
         # Get baseline HAProxy stats
         stats_url = f"http://{host}:{monitor_port}/stats;csv"
@@ -136,10 +142,10 @@ def test_rgw_high_traffic(config, ssh_con, rgw_node):
         if formatted_stats and not formatted_stats.startswith("<!DOCTYPE"):
             log.info(f"Baseline HAProxy stats (formatted):\n{formatted_stats}")
         
-        # Create 20 buckets using reusable.create_bucket
+        # Create buckets using reusable.create_bucket
         bucket_names = [
             utils.gen_bucket_name_from_userid(user_info["user_id"], rand_no=bc)
-            for bc in range(config.bucket_count)
+            for bc in range(bucket_count)
         ]
         
         buckets = []
@@ -153,58 +159,91 @@ def test_rgw_high_traffic(config, ssh_con, rgw_node):
                 log.error(f"Error creating bucket {bucket_name}: {e}")
                 raise TestExecError(f"Failed to create bucket {bucket_name}: {e}")
         
-        log.info("Creating 20 buckets concurrently using reusable.create_bucket")
-        with ThreadPoolExecutor(max_workers=config.bucket_count) as executor:
-            executor.map(create_bucket_wrapper, bucket_names)
+        if test_ops.get("create_bucket", False):
+            log.info(f"Creating {bucket_count} buckets concurrently using reusable.create_bucket")
+            with ThreadPoolExecutor(max_workers=bucket_count) as executor:
+                executor.map(create_bucket_wrapper, bucket_names)
         
         # Wait for bucket creation to propagate
         time.sleep(5)
         
-        # Upload 100 objects (1 byte each) to each bucket concurrently using reusable.upload_object
+        # Upload objects to each bucket concurrently using reusable.upload_objects
         def upload_objects_to_bucket(bucket):
             try:
                 bucket_name = bucket.name
-                log.info(f"Uploading {config.objects_count} objects to bucket: {bucket_name}")
-                for oc in range(config.objects_count):
+                log.info(f"Uploading {objects_count} objects to bucket: {bucket_name}")
+                reusable.upload_objects(
+                    bucket,
+                    test_data_path,
+                    {
+                        "objects_count": objects_count,
+                        "obj_size": random.randint(objects_size_range["min"], objects_size_range["max"])
+                    },
+                    user_info,
+                )
+                # Clean up local files if created
+                for oc in range(objects_count):
                     s3_object_name = utils.gen_s3_object_name(bucket_name, oc)
-                    s3_object_path = os.path.join(config.test_data_path, s3_object_name)
-                    log.info(f"Uploading object: {s3_object_name} to {bucket_name}")
-                    reusable.upload_object(
-                        s3_object_name,
-                        bucket,
-                        config.test_data_path,
-                        config,
-                        user_info,
-                    )
-                    # Clean up local file if created
+                    s3_object_path = os.path.join(test_data_path, s3_object_name)
                     if os.path.exists(s3_object_path):
                         utils.exec_shell_cmd(f"rm -f {s3_object_path}")
             except Exception as e:
                 log.error(f"Error uploading objects to {bucket_name}: {e}")
                 raise TestExecError(f"Failed to upload objects to {bucket_name}: {e}")
         
-        log.info("Uploading 100 objects to each of 20 buckets concurrently")
-        start_time = time.time()
-        with ThreadPoolExecutor(max_workers=config.bucket_count) as executor:
-            executor.map(upload_objects_to_bucket, buckets)
-        upload_time = time.time() - start_time
-        log.info(f"Total upload time: {upload_time:.2f} seconds")
+        if test_ops.get("create_object", False):
+            log.info(f"Uploading {objects_count} objects to each of {bucket_count} buckets concurrently")
+            start_time = time.time()
+            with ThreadPoolExecutor(max_workers=bucket_count) as executor:
+                executor.map(upload_objects_to_bucket, buckets)
+            upload_time = time.time() - start_time
+            log.info(f"Total upload time: {upload_time:.2f} seconds")
         
-        # Check HAProxy stats after uploads
+        # Download objects from each bucket concurrently using reusable.download_object
+        def download_objects_from_bucket(bucket):
+            try:
+                bucket_name = bucket.name
+                log.info(f"Downloading {objects_count} objects from bucket: {bucket_name}")
+                for oc in range(objects_count):
+                    s3_object_name = utils.gen_s3_object_name(bucket_name, oc)
+                    s3_object_path = os.path.join(test_data_path, s3_object_name)
+                    log.info(f"Downloading object: {s3_object_name} from {bucket_name}")
+                    reusable.download_object(
+                        s3_object_name,
+                        bucket,
+                        test_data_path,
+                        config_dict,
+                        user_info,
+                    )
+                    # Clean up downloaded file
+                    if os.path.exists(s3_object_path):
+                        utils.exec_shell_cmd(f"rm -f {s3_object_path}")
+            except Exception as e:
+                log.error(f"Error downloading objects from {bucket_name}: {e}")
+                raise TestExecError(f"Failed to download objects from {bucket_name}: {e}")
+        
+        if test_ops.get("download_object", False):
+            log.info(f"Downloading {objects_count} objects from each of {bucket_count} buckets concurrently")
+            start_time = time.time()
+            with ThreadPoolExecutor(max_workers=bucket_count) as executor:
+                executor.map(download_objects_from_bucket, buckets)
+            download_time = time.time() - start_time
+            log.info(f"Total download time: {download_time:.2f} seconds")
+        
+        # Check HAProxy stats after operations
         stats_output = utils.exec_shell_cmd(stats_cmd)
         raw_stats_output = utils.exec_shell_cmd(raw_stats_cmd)
         rgw_request_count_after = {}
         if stats_output and not stats_output.startswith("<!DOCTYPE"):
-            log.info(f"HAProxy stats after uploads (formatted):\n{stats_output}")
+            log.info(f"HAProxy stats after operations (formatted):\n{stats_output}")
             if raw_stats_output:
                 rgw_request_count_after = parse_haproxy_stats(raw_stats_output, service_name)
-                log.info(f"HAProxy stats after uploads (parsed): {rgw_request_count_after}")
+                log.info(f"HAProxy stats after operations (parsed): {rgw_request_count_after}")
             else:
-                log.warning("Failed to retrieve raw HAProxy stats after uploads")
-                raise TestExecError("Failed to retrieve raw HAProxy stats after uploads")
+                raise TestExecError("Failed to retrieve raw HAProxy stats after operations")
         else:
-            log.warning(f"Failed to retrieve HAProxy stats after uploads, formatted output: {stats_output[:100]}...")
-            raise TestExecError("Failed to retrieve HAProxy stats after uploads")
+            log.warning(f"Failed to retrieve HAProxy stats after operations, formatted output: {stats_output[:100]}...")
+            raise TestExecError("Failed to retrieve HAProxy stats after operations")
         
         # Verify traffic distribution
         orch_ps_cmd = "sudo ceph orch ps --format json"
@@ -215,7 +254,7 @@ def test_rgw_high_traffic(config, ssh_con, rgw_node):
         
         if rgw_request_count_after:
             total_rgw_requests = sum(rgw_request_count_after.values())
-            expected_requests = config.bucket_count * config.objects_count  # 20 * 100 = 2000
+            expected_requests = bucket_count * objects_count * (2 if test_ops.get("download_object", False) else 1)  # Uploads + downloads
             if total_rgw_requests < expected_requests * 0.5:
                 raise TestExecError(f"Too few requests recorded: {total_rgw_requests} out of {expected_requests}")
             if len(rgw_request_count_after) != expected_rgw_count:
@@ -236,18 +275,18 @@ def test_rgw_high_traffic(config, ssh_con, rgw_node):
         if not out:
             raise TestExecError("Ceph status is either in HEALTH_ERR or we have large omap objects.")
         
-        log.info(f"High traffic test completed successfully. Traffic distribution: {rgw_request_count_after}")
+        log.info(f"Test completed successfully. Traffic distribution: {rgw_request_count_after}")
         return True
     
     except json.JSONDecodeError as e:
         log.error(f"Failed to parse ceph orch command output: {e}")
         raise TestExecError(f"Failed to parse ceph orch command output: {e}")
     except TestExecError as e:
-        log.error(e.message)
+        log.error(str(e))
         raise
     except Exception as e:
-        log.error(f"Unexpected error in test_rgw_high_traffic: {str(e)}")
-        raise TestExecError(f"Unexpected error during test_rgw_high_traffic: {str(e)}")
+        log.error(f"Unexpected error in test_Mbuckets_with_Nobjects: {str(e)}")
+        raise TestExecError(f"Unexpected error during test_Mbuckets_with_Nobjects: {str(e)}")
 
 def rgw_with_concentrators(ssh_con=None, rgw_node=None):
     """Verify if RGW and HAProxy are co-located on the same node"""
