@@ -1,5 +1,3 @@
-# test_rgw_concentrators.py (main script)
-
 """ test_rgw_concentrators.py - Test if RGW and HAProxy are on the same node and concentrator behavior
 
 Usage: test_rgw_concentrators.py -c <input_yaml>
@@ -16,6 +14,7 @@ Operation:
     Test stopping HAProxy instance and verify traffic stops
     Test restarting HAProxy during traffic and verify even distribution
     Test removing RGW service and verify RGW and HAProxy are removed
+    Test high traffic by creating 20 buckets and uploading 100 objects each
     Report status of colocation and concentrator behavior checks
 """
 
@@ -39,50 +38,54 @@ from v2.lib.exceptions import RGWBaseException, TestExecError
 log = logging.getLogger()
 
 def test_exec(config, ssh_con, rgw_node):
-    # Now call the functions from the imported module, similar to how orphan_utils is called:
+    # Validate RGW credentials are provided for high traffic test
+    if config.test_ops.get("test_high_traffic", False):
+        if not (hasattr(config, 'access_key') and hasattr(config, 'secret_key')):
+            raise TestExecError("RGW access_key and secret_key must be provided in the config for test_high_traffic")
+
+    # Call the functions from the imported module
     if config.test_ops.get("rgw_with_concentrators", False):
         log.info("Running RGW and HAProxy colocation check")
-        # Call the function and check its return value directly
-        if not concentrator_tests.rgw_with_concentrators(ssh_con, rgw_node): # Ensure arguments are passed if the function in concentrator_tests expects them
+        if not concentrator_tests.rgw_with_concentrators(ssh_con, rgw_node):
             raise TestExecError("RGW and HAProxy colocation check failed")
     
-    # Check if concentrator behavior test should be run
     if config.test_ops.get("test_concentrator_behavior", False):
         log.info("Running RGW and HAProxy concentrator behavior test")
-        # Pass config, ssh_con, rgw_node to the imported function
         if not concentrator_tests.test_rgw_concentrator_behavior(config, ssh_con, rgw_node):
             raise TestExecError("RGW and HAProxy concentrator behavior test failed")
     
-    # Check if single RGW stop test should be run
     if config.test_ops.get("test_single_rgw_stop", False):
         log.info("Running single RGW instance stop test")
         if not concentrator_tests.test_single_rgw_stop(config, ssh_con, rgw_node):
             raise TestExecError("Single RGW instance stop test failed")
     
-    # Check if HAProxy stop test should be run
     if config.test_ops.get("test_haproxy_stop", False):
         log.info("Running HAProxy instance stop test")
         if not concentrator_tests.test_haproxy_stop(config, ssh_con, rgw_node):
             raise TestExecError("HAProxy instance stop test failed")
     
-    # Check if HAProxy restart test should be run
     if config.test_ops.get("test_haproxy_restart", False):
         log.info("Running HAProxy instance restart test during traffic")
         if not concentrator_tests.test_haproxy_restart(config, ssh_con, rgw_node):
             raise TestExecError("HAProxy instance restart test failed")
     
-    # Check if RGW service removal test should be run
     if config.test_ops.get("test_rgw_service_removal", False):
         log.info("Running RGW service removal test")
         if not concentrator_tests.test_rgw_service_removal(config, ssh_con, rgw_node):
             raise TestExecError("RGW service removal test failed")
+    
+    if config.test_ops.get("test_high_traffic", False):
+        log.info("Running RGW high traffic test with bucket creation and object uploads")
+        if not concentrator_tests.test_rgw_high_traffic(config, ssh_con, rgw_node):
+            raise TestExecError("RGW high traffic test failed")
     
     if not (config.test_ops.get("rgw_with_concentrators", False) or 
             config.test_ops.get("test_concentrator_behavior", False) or 
             config.test_ops.get("test_single_rgw_stop", False) or 
             config.test_ops.get("test_haproxy_stop", False) or 
             config.test_ops.get("test_haproxy_restart", False) or 
-            config.test_ops.get("test_rgw_service_removal", False)):
+            config.test_ops.get("test_rgw_service_removal", False) or
+            config.test_ops.get("test_high_traffic", False)):
         log.info("Skipping RGW and HAProxy tests as per configuration")
     
     # Check for any crashes during execution
@@ -122,8 +125,7 @@ if __name__ == "__main__":
         yaml_file = args.config
         rgw_node = args.rgw_node
         ssh_con = None
-        # Corrected the local IP check for remote connection
-        if rgw_node != "127.0.0.1": 
+        if rgw_node != "127.0.0.1":
             ssh_con = utils.connect_remote(rgw_node)
         log_f_name = os.path.basename(os.path.splitext(yaml_file)[0])
         configure_logging(f_name=log_f_name, set_level=args.log_level.upper())
