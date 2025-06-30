@@ -81,7 +81,7 @@ def get_haproxy_monitor_password(ssh_con, rgw_node):
         log.error(f"An unexpected error occurred while fetching HAProxy monitor password from {rgw_node}: {str(e)}")
         raise TestExecError(f"Unable to retrieve HAProxy monitor password due to unexpected error: {str(e)}")
 def test_rgw_high_traffic(config, ssh_con, rgw_node):
-    """Send high traffic to the concentrator port, create 20 buckets, upload 100 objects each (1 byte), and monitor even distribution."""
+    """Send high traffic to RGW via HAProxy with 20 buckets and 100 objects each, monitor even distribution."""
     log.info("Testing high traffic to RGW via HAProxy with 20 buckets and 100 objects each")
     try:
         # Get HAProxy monitor password
@@ -111,19 +111,19 @@ def test_rgw_high_traffic(config, ssh_con, rgw_node):
         monitor_port = rgw_service_info.get('spec', {}).get('concentrator_monitor_port', 1967)
         monitor_user = rgw_service_info.get('spec', {}).get('concentrator_monitor_user', 'admin')
         
-        # Initialize boto3 client for RGW
-        rgw_endpoint = f"http://{host}:{frontend_port}"
-        s3_client = boto3.client(
-            's3',
-            endpoint_url=rgw_endpoint,
-            aws_access_key_id=config.access_key,
-            aws_secret_access_key=config.secret_key
-        )
+        # Create RGW user
+        user_info = s3lib.create_users(1)[0]
+        log.info(f"Created user: {user_info['user_id']}")
         
-        # Configuration
-        NUM_BUCKETS = 20
-        OBJECTS_PER_BUCKET = 100
-        BUCKET_PREFIX = f"test-bucket-{uuid.uuid4().hex[:8]}-"
+        # Authenticate with RGW through HAProxy frontend
+        rgw_endpoint = f"http://{host}:{frontend_port}"
+        auth = Auth(user_info, ssh_con, ssl=config.ssl, haproxy=True)
+        rgw_conn = auth.do_auth(endpoint_url=rgw_endpoint)
+        
+        # Configuration for buckets and objects
+        config.bucket_count = 20
+        config.objects_count = 100
+        config.mapped_sizes = {i: 1 for i in range(config.objects_count)}  # 1 byte per object
         
         # Get baseline HAProxy stats
         stats_url = f"http://{host}:{monitor_port}/stats;csv"
@@ -136,41 +136,57 @@ def test_rgw_high_traffic(config, ssh_con, rgw_node):
         if formatted_stats and not formatted_stats.startswith("<!DOCTYPE"):
             log.info(f"Baseline HAProxy stats (formatted):\n{formatted_stats}")
         
-        # Create 20 buckets
-        bucket_names = [f"{BUCKET_PREFIX}{i}" for i in range(NUM_BUCKETS)]
-        def create_bucket(bucket_name):
-            try:
-                s3_client.create_bucket(Bucket=bucket_name)
-                log.info(f"Created bucket: {bucket_name}")
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'BucketAlreadyOwnedByYou':
-                    log.info(f"Bucket {bucket_name} already exists and is owned by you")
-                else:
-                    log.error(f"Error creating bucket {bucket_name}: {e}")
-                    raise TestExecError(f"Failed to create bucket {bucket_name}: {e}")
+        # Create 20 buckets using reusable.create_bucket
+        bucket_names = [
+            utils.gen_bucket_name_from_userid(user_info["user_id"], rand_no=bc)
+            for bc in range(config.bucket_count)
+        ]
         
-        log.info("Creating 20 buckets")
-        with ThreadPoolExecutor(max_workers=NUM_BUCKETS) as executor:
-            executor.map(create_bucket, bucket_names)
+        buckets = []
+        def create_bucket_wrapper(bucket_name):
+            try:
+                log.info(f"Creating bucket: {bucket_name}")
+                bucket = reusable.create_bucket(bucket_name, rgw_conn, user_info)
+                log.info(f"Created bucket: {bucket.name}")
+                buckets.append(bucket)
+            except Exception as e:
+                log.error(f"Error creating bucket {bucket_name}: {e}")
+                raise TestExecError(f"Failed to create bucket {bucket_name}: {e}")
+        
+        log.info("Creating 20 buckets concurrently using reusable.create_bucket")
+        with ThreadPoolExecutor(max_workers=config.bucket_count) as executor:
+            executor.map(create_bucket_wrapper, bucket_names)
         
         # Wait for bucket creation to propagate
         time.sleep(5)
         
-        # Upload 100 objects (1 byte each) to each bucket concurrently
-        def upload_objects(bucket_name):
+        # Upload 100 objects (1 byte each) to each bucket concurrently using reusable.upload_object
+        def upload_objects_to_bucket(bucket):
             try:
-                for i in range(OBJECTS_PER_BUCKET):
-                    object_key = f"object-{i}-{uuid.uuid4().hex}.txt"
-                    s3_client.put_object(Bucket=bucket_name, Key=object_key, Body=b'x')
-                    log.info(f"Uploaded {object_key} to {bucket_name}")
-            except ClientError as e:
-                log.error(f"Error uploading to {bucket_name}: {e}")
+                bucket_name = bucket.name
+                log.info(f"Uploading {config.objects_count} objects to bucket: {bucket_name}")
+                for oc in range(config.objects_count):
+                    s3_object_name = utils.gen_s3_object_name(bucket_name, oc)
+                    s3_object_path = os.path.join(config.test_data_path, s3_object_name)
+                    log.info(f"Uploading object: {s3_object_name} to {bucket_name}")
+                    reusable.upload_object(
+                        s3_object_name,
+                        bucket,
+                        config.test_data_path,
+                        config,
+                        user_info,
+                    )
+                    # Clean up local file if created
+                    if os.path.exists(s3_object_path):
+                        utils.exec_shell_cmd(f"rm -f {s3_object_path}")
+            except Exception as e:
+                log.error(f"Error uploading objects to {bucket_name}: {e}")
                 raise TestExecError(f"Failed to upload objects to {bucket_name}: {e}")
         
         log.info("Uploading 100 objects to each of 20 buckets concurrently")
         start_time = time.time()
-        with ThreadPoolExecutor(max_workers=NUM_BUCKETS) as executor:
-            executor.map(upload_objects, bucket_names)
+        with ThreadPoolExecutor(max_workers=config.bucket_count) as executor:
+            executor.map(upload_objects_to_bucket, buckets)
         upload_time = time.time() - start_time
         log.info(f"Total upload time: {upload_time:.2f} seconds")
         
@@ -199,7 +215,7 @@ def test_rgw_high_traffic(config, ssh_con, rgw_node):
         
         if rgw_request_count_after:
             total_rgw_requests = sum(rgw_request_count_after.values())
-            expected_requests = NUM_BUCKETS * OBJECTS_PER_BUCKET  # 20 * 100 = 2000
+            expected_requests = config.bucket_count * config.objects_count  # 20 * 100 = 2000
             if total_rgw_requests < expected_requests * 0.5:
                 raise TestExecError(f"Too few requests recorded: {total_rgw_requests} out of {expected_requests}")
             if len(rgw_request_count_after) != expected_rgw_count:
@@ -209,6 +225,16 @@ def test_rgw_high_traffic(config, ssh_con, rgw_node):
                 if abs(rgw_requests - average_rgw_requests) > 0.2 * average_rgw_requests:
                     log.warning(f"Uneven traffic distribution for {rgw}: {rgw_requests} requests (expected ~{average_rgw_requests})")
                     raise TestExecError(f"Uneven traffic distribution detected for {rgw}")
+        
+        # Check for Ceph daemon crashes
+        crash_info = reusable.check_for_crash()
+        if crash_info:
+            raise TestExecError("Ceph daemon crash found!")
+        
+        # Check cluster health
+        out = utils.get_ceph_status()
+        if not out:
+            raise TestExecError("Ceph status is either in HEALTH_ERR or we have large omap objects.")
         
         log.info(f"High traffic test completed successfully. Traffic distribution: {rgw_request_count_after}")
         return True
