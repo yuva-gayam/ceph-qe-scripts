@@ -25,14 +25,15 @@ import json
 import argparse
 import traceback
 import subprocess
+
 sys.path.append(os.path.abspath(os.path.join(__file__, "../../../..")))
 
 from v2.lib.resource_op import Config
-from v2.tests.s3_swift.reusables import rgw_concentrators as concentrator_tests 
+from v2.tests.s3_swift.reusables import rgw_concentrators as concentrator_tests
 from v2.utils.log import configure_logging
 from v2.utils.test_desc import AddTestInfo
 from v2.utils import utils
-from v2.tests.s3_swift import reusable 
+from v2.tests.s3_swift import reusable
 from v2.lib.exceptions import RGWBaseException, TestExecError
 
 log = logging.getLogger()
@@ -76,7 +77,17 @@ def test_exec(config, ssh_con, rgw_node):
     
     if config.test_ops.get("test_high_traffic", False):
         log.info("Running RGW high traffic test with bucket creation and object uploads")
-        if not concentrator_tests.test_rgw_high_traffic(config, ssh_con, rgw_node):
+        # Prepare config_dict for test_Mbuckets_with_Nobjects
+        config_dict = {
+            "user_count": config.user_count if hasattr(config, 'user_count') else 1,
+            "bucket_count": config.bucket_count if hasattr(config, 'bucket_count') else 2,
+            "objects_count": config.objects_count if hasattr(config, 'objects_count') else 150,
+            "objects_size_range": config.objects_size_range if hasattr(config, 'objects_size_range') else {"min": 5, "max": 10},
+            "test_ops": config.test_ops,
+            "test_data_path": os.path.join(os.path.abspath(os.path.join(__file__, "../../..")), "test_data"),
+            "local_file_delete": True
+        }
+        if not concentrator_tests.test_Mbuckets_with_Nobjects(ssh_con, rgw_node, config_dict):
             raise TestExecError("RGW high traffic test failed")
     
     if not (config.test_ops.get("rgw_with_concentrators", False) or 
@@ -92,6 +103,7 @@ def test_exec(config, ssh_con, rgw_node):
     crash_info = reusable.check_for_crash()
     if crash_info:
         raise TestExecError("Ceph daemon crash found!")
+
 
 if __name__ == "__main__":
     test_info = AddTestInfo("check RGW and HAProxy colocation and concentrator behavior")
