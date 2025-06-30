@@ -16,5 +16,5 @@ config:
     test_haproxy_stop: false
     test_haproxy_restart: false
     test_rgw_service_removal: false
+    test_high_traffic: true
     traffic_test_requests: 20
-  
