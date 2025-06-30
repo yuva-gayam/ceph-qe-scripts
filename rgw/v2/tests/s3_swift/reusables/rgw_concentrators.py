@@ -7,6 +7,7 @@ import traceback
 import subprocess
 import urllib.parse
 import re
+import boto3
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "../../../..")))
 import argparse
@@ -79,6 +80,148 @@ def get_haproxy_monitor_password(ssh_con, rgw_node):
     except Exception as e:
         log.error(f"An unexpected error occurred while fetching HAProxy monitor password from {rgw_node}: {str(e)}")
         raise TestExecError(f"Unable to retrieve HAProxy monitor password due to unexpected error: {str(e)}")
+def test_rgw_high_traffic(config, ssh_con, rgw_node):
+    """Send high traffic to the concentrator port, create 20 buckets, upload 100 objects each (1 byte), and monitor even distribution."""
+    log.info("Testing high traffic to RGW via HAProxy with 20 buckets and 100 objects each")
+    try:
+        # Get HAProxy monitor password
+        monitor_password = get_haproxy_monitor_password(ssh_con, rgw_node)
+        
+        # Verify RGW and HAProxy configuration
+        orch_ls_cmd = "sudo ceph orch ls rgw --format json"
+        orch_ls_output = utils.exec_shell_cmd(orch_ls_cmd)
+        if not orch_ls_output:
+            raise TestExecError(f"Failed to get RGW service info: no output from '{orch_ls_cmd}'")
+        
+        orch_ls_data = json.loads(orch_ls_output)
+        if not orch_ls_data:
+            raise TestExecError("No RGW service information found")
+        
+        rgw_service_info = orch_ls_data[0]
+        service_name = rgw_service_info.get('service_name', '')
+        if not service_name:
+            raise TestExecError("RGW service name not found")
+        
+        hosts = rgw_service_info.get('placement', {}).get('hosts', [])
+        if not hosts:
+            raise TestExecError("No hosts found for RGW service")
+        host = hosts[0]
+        
+        frontend_port = rgw_service_info.get('spec', {}).get('concentrator_frontend_port', 8080)
+        monitor_port = rgw_service_info.get('spec', {}).get('concentrator_monitor_port', 1967)
+        monitor_user = rgw_service_info.get('spec', {}).get('concentrator_monitor_user', 'admin')
+        
+        # Initialize boto3 client for RGW
+        rgw_endpoint = f"http://{host}:{frontend_port}"
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=rgw_endpoint,
+            aws_access_key_id=config.access_key,
+            aws_secret_access_key=config.secret_key
+        )
+        
+        # Configuration
+        NUM_BUCKETS = 20
+        OBJECTS_PER_BUCKET = 100
+        BUCKET_PREFIX = f"test-bucket-{uuid.uuid4().hex[:8]}-"
+        
+        # Get baseline HAProxy stats
+        stats_url = f"http://{host}:{monitor_port}/stats;csv"
+        stats_cmd = f"curl -s -u {monitor_user}:{monitor_password} \"{stats_url}\" | awk -F',' 'NR==1 || /^backend|^frontend|^stats/' | cut -d',' -f1,2,5,8,9,10,18,35,73 | column -s',' -t"
+        raw_stats_cmd = f"curl -s -u {monitor_user}:{monitor_password} \"{stats_url}\""
+        baseline_stats = utils.exec_shell_cmd(raw_stats_cmd)
+        initial_rgw_requests = parse_haproxy_stats(baseline_stats, service_name) if baseline_stats else {}
+        log.info(f"Baseline HAProxy stats (parsed): {initial_rgw_requests}")
+        formatted_stats = utils.exec_shell_cmd(stats_cmd)
+        if formatted_stats and not formatted_stats.startswith("<!DOCTYPE"):
+            log.info(f"Baseline HAProxy stats (formatted):\n{formatted_stats}")
+        
+        # Create 20 buckets
+        bucket_names = [f"{BUCKET_PREFIX}{i}" for i in range(NUM_BUCKETS)]
+        def create_bucket(bucket_name):
+            try:
+                s3_client.create_bucket(Bucket=bucket_name)
+                log.info(f"Created bucket: {bucket_name}")
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'BucketAlreadyOwnedByYou':
+                    log.info(f"Bucket {bucket_name} already exists and is owned by you")
+                else:
+                    log.error(f"Error creating bucket {bucket_name}: {e}")
+                    raise TestExecError(f"Failed to create bucket {bucket_name}: {e}")
+        
+        log.info("Creating 20 buckets")
+        with ThreadPoolExecutor(max_workers=NUM_BUCKETS) as executor:
+            executor.map(create_bucket, bucket_names)
+        
+        # Wait for bucket creation to propagate
+        time.sleep(5)
+        
+        # Upload 100 objects (1 byte each) to each bucket concurrently
+        def upload_objects(bucket_name):
+            try:
+                for i in range(OBJECTS_PER_BUCKET):
+                    object_key = f"object-{i}-{uuid.uuid4().hex}.txt"
+                    s3_client.put_object(Bucket=bucket_name, Key=object_key, Body=b'x')
+                    log.info(f"Uploaded {object_key} to {bucket_name}")
+            except ClientError as e:
+                log.error(f"Error uploading to {bucket_name}: {e}")
+                raise TestExecError(f"Failed to upload objects to {bucket_name}: {e}")
+        
+        log.info("Uploading 100 objects to each of 20 buckets concurrently")
+        start_time = time.time()
+        with ThreadPoolExecutor(max_workers=NUM_BUCKETS) as executor:
+            executor.map(upload_objects, bucket_names)
+        upload_time = time.time() - start_time
+        log.info(f"Total upload time: {upload_time:.2f} seconds")
+        
+        # Check HAProxy stats after uploads
+        stats_output = utils.exec_shell_cmd(stats_cmd)
+        raw_stats_output = utils.exec_shell_cmd(raw_stats_cmd)
+        rgw_request_count_after = {}
+        if stats_output and not stats_output.startswith("<!DOCTYPE"):
+            log.info(f"HAProxy stats after uploads (formatted):\n{stats_output}")
+            if raw_stats_output:
+                rgw_request_count_after = parse_haproxy_stats(raw_stats_output, service_name)
+                log.info(f"HAProxy stats after uploads (parsed): {rgw_request_count_after}")
+            else:
+                log.warning("Failed to retrieve raw HAProxy stats after uploads")
+                raise TestExecError("Failed to retrieve raw HAProxy stats after uploads")
+        else:
+            log.warning(f"Failed to retrieve HAProxy stats after uploads, formatted output: {stats_output[:100]}...")
+            raise TestExecError("Failed to retrieve HAProxy stats after uploads")
+        
+        # Verify traffic distribution
+        orch_ps_cmd = "sudo ceph orch ps --format json"
+        orch_ps_output = utils.exec_shell_cmd(orch_ps_cmd)
+        orch_ps_data = json.loads(orch_ps_output)
+        rgw_services = [s for s in orch_ps_data if s.get('daemon_type') == 'rgw' and s.get('service_name') == service_name]
+        expected_rgw_count = len(rgw_services)
+        
+        if rgw_request_count_after:
+            total_rgw_requests = sum(rgw_request_count_after.values())
+            expected_requests = NUM_BUCKETS * OBJECTS_PER_BUCKET  # 20 * 100 = 2000
+            if total_rgw_requests < expected_requests * 0.5:
+                raise TestExecError(f"Too few requests recorded: {total_rgw_requests} out of {expected_requests}")
+            if len(rgw_request_count_after) != expected_rgw_count:
+                raise TestExecError(f"Traffic not distributed to all {expected_rgw_count} RGW instances: {rgw_request_count_after}")
+            average_rgw_requests = total_rgw_requests / expected_rgw_count
+            for rgw, rgw_requests in rgw_request_count_after.items():
+                if abs(rgw_requests - average_rgw_requests) > 0.2 * average_rgw_requests:
+                    log.warning(f"Uneven traffic distribution for {rgw}: {rgw_requests} requests (expected ~{average_rgw_requests})")
+                    raise TestExecError(f"Uneven traffic distribution detected for {rgw}")
+        
+        log.info(f"High traffic test completed successfully. Traffic distribution: {rgw_request_count_after}")
+        return True
+    
+    except json.JSONDecodeError as e:
+        log.error(f"Failed to parse ceph orch command output: {e}")
+        raise TestExecError(f"Failed to parse ceph orch command output: {e}")
+    except TestExecError as e:
+        log.error(e.message)
+        raise
+    except Exception as e:
+        log.error(f"Unexpected error in test_rgw_high_traffic: {str(e)}")
+        raise TestExecError(f"Unexpected error during test_rgw_high_traffic: {str(e)}")
 
 def rgw_with_concentrators(ssh_con=None, rgw_node=None):
     """Verify if RGW and HAProxy are co-located on the same node"""
