@@ -10,16 +10,18 @@ import urllib.parse
 
 sys.path.append(os.path.abspath(os.path.join(__file__, "../../../..")))
 import argparse
+
 import v2.lib.resource_op as s3lib
-from v2.lib.s3.write_io_info import BasicIOInfoStructure, BucketIoInfo, IOInfoInitialize
-from v2.lib.s3.auth import Auth
 from v2.lib.resource_op import Config
+from v2.lib.s3.auth import Auth
+from v2.lib.s3.write_io_info import BasicIOInfoStructure, BucketIoInfo, IOInfoInitialize
+from v2.tests.s3_swift import reusable
 from v2.utils import utils
 from v2.utils.log import configure_logging
 from v2.utils.test_desc import AddTestInfo
-from v2.tests.s3_swift import reusable
 
 log = logging.getLogger()
+
 
 def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
     """
@@ -27,7 +29,9 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
     based on the provided configuration, similar to test_Mbuckets_with_Nobjects.py.
     This function is now placed in rgw_concentrators.py.
     """
-    log.info("Starting S3 operations: create bucket, create object, download object, delete bucket object")
+    log.info(
+        "Starting S3 operations: create bucket, create object, download object, delete bucket object"
+    )
 
     # Initialize IOInfo objects
     io_info_initialize = IOInfoInitialize()
@@ -35,23 +39,25 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
 
     # Step 1: Get the initial data structure that *should* be in io_info.yaml.
     current_yaml_data = basic_io_structure.initial()
-    log.info(f"Initial YAML data from basic_io_structure.initial(): {current_yaml_data}")
+    log.info(
+        f"Initial YAML data from basic_io_structure.initial(): {current_yaml_data}"
+    )
 
     # Step 2: Ensure the 'users' key exists in the data structure
-    if 'users' not in current_yaml_data:
-        current_yaml_data['users'] = []
+    if "users" not in current_yaml_data:
+        current_yaml_data["users"] = []
 
     # Step 3: Add created users to the `current_yaml_data` dictionary
     log.info("Adding created user information to io_info.yaml for tracking.")
     for each_user in all_users_info:
         user_info_to_add = {
-            'user_id': each_user['user_id'],
-            'access_key': each_user['access_key'],
-            'secret_key': each_user['secret_key'],
-            'bucket': [],  # Initialize with empty bucket list
-            'deleted': False
+            "user_id": each_user["user_id"],
+            "access_key": each_user["access_key"],
+            "secret_key": each_user["secret_key"],
+            "bucket": [],  # Initialize with empty bucket list
+            "deleted": False,
         }
-        current_yaml_data['users'].append(user_info_to_add)
+        current_yaml_data["users"].append(user_info_to_add)
 
     log.info(f"Data to be written to io_info.yaml: {current_yaml_data}")
 
@@ -59,15 +65,16 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
     io_info_initialize.initialize(current_yaml_data)
     log.info("User information successfully added to io_info.yaml.")
 
-
     for each_user in all_users_info:
         log.info(f"Performing S3 operations for user: {each_user['user_id']}")
         auth = reusable.get_auth(each_user, ssh_con, config.ssl, config.haproxy)
-        rgw_conn = auth.do_auth() # This is the resource connection object (e.g., s3.ServiceResource)
+        rgw_conn = auth.do_auth()
 
         # Create buckets
         if config.test_ops.get("create_bucket", False):
-            log.info(f"Number of buckets to create: {config.bucket_count} for user: {each_user['user_id']}")
+            log.info(
+                f"Number of buckets to create: {config.bucket_count} for user: {each_user['user_id']}"
+            )
             for bc in range(config.bucket_count):
                 bucket_name_to_create = utils.gen_bucket_name_from_userid(
                     each_user["user_id"], rand_no=bc
@@ -80,10 +87,12 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
                 if config.test_ops.get("create_object", False):
                     # Prepare mapped sizes for objects
                     config.mapped_sizes = utils.make_mapped_sizes(config)
-                    log.info(f"Number of S3 objects to create per bucket: {config.objects_count}")
+                    log.info(
+                        f"Number of S3 objects to create per bucket: {config.objects_count}"
+                    )
 
                     # List to store object keys for batch deletion later
-                    object_keys_to_delete = [] 
+                    object_keys_to_delete = []
 
                     for oc, size in list(config.mapped_sizes.items()):
                         config.obj_size = size
@@ -91,8 +100,6 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
                             bucket_name_to_create, oc
                         )
                         log.info(f"S3 object name: {s3_object_name}")
-                        
-                        # Use the passed test_data_path here
                         s3_object_path = os.path.join(test_data_path, s3_object_name)
                         log.info(f"S3 object path: {s3_object_path}")
 
@@ -101,11 +108,11 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
                         reusable.upload_object(
                             s3_object_name,
                             bucket,
-                            test_data_path, # Pass test_data_path
+                            test_data_path,
                             config,
                             each_user,
                         )
-                        object_keys_to_delete.append({'Key': s3_object_name}) # Add to list for batch deletion
+                        object_keys_to_delete.append({"Key": s3_object_name})
 
                         if config.test_ops.get("download_object", False):
                             log.info(f"Trying to download object: {s3_object_name}")
@@ -113,8 +120,12 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
                             s3_object_download_path = os.path.join(
                                 test_data_path, s3_object_download_name
                             )
-                            log.info(f"s3_object_download_path: {s3_object_download_path}")
-                            log.info(f"Downloading to filename: {s3_object_download_name}")
+                            log.info(
+                                f"s3_object_download_path: {s3_object_download_path}"
+                            )
+                            log.info(
+                                f"Downloading to filename: {s3_object_download_name}"
+                            )
 
                             object_downloaded_status = s3lib.resource_op(
                                 {
@@ -137,15 +148,23 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
                                 s3_object_download_path
                             )
                             s3_object_uploaded_md5 = utils.get_md5(s3_object_path)
-                            log.info(f"s3_object_downloaded_md5: {s3_object_downloaded_md5}")
-                            log.info(f"s3_object_uploaded_md5: {s3_object_uploaded_md5}")
-                            if str(s3_object_uploaded_md5) == str(s3_object_downloaded_md5):
+                            log.info(
+                                f"s3_object_downloaded_md5: {s3_object_downloaded_md5}"
+                            )
+                            log.info(
+                                f"s3_object_uploaded_md5: {s3_object_uploaded_md5}"
+                            )
+                            if str(s3_object_uploaded_md5) == str(
+                                s3_object_downloaded_md5
+                            ):
                                 log.info("MD5 match")
                                 utils.exec_shell_cmd(
                                     f"rm -rf {s3_object_download_path}"
                                 )
                             else:
-                                raise TestExecError("MD5 mismatch for downloaded object")
+                                raise TestExecError(
+                                    "MD5 mismatch for downloaded object"
+                                )
 
                         if config.local_file_delete:
                             log.info("Deleting local file created after the upload")
@@ -154,53 +173,77 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
                 if config.test_ops.get("delete_bucket_object", False):
                     # Delete objects
                     log.info(f"Deleting objects from bucket: {bucket_name_to_create}")
-                    
-                    if object_keys_to_delete: # Only attempt if there are objects to delete
+
+                    if (
+                        object_keys_to_delete
+                    ):  # Only attempt if there are objects to delete
                         try:
-                            # Use boto3's delete_objects with the correct parameter structure
                             response = bucket.delete_objects(
                                 Delete={
-                                    'Objects': object_keys_to_delete,
-                                    'Quiet': False # Set to True if you don't want success responses for each object
+                                    "Objects": object_keys_to_delete,
+                                    "Quiet": False,
                                 }
                             )
                             log.info(f"Batch delete response: {response}")
-                            if 'Errors' in response and response['Errors']:
-                                for error in response['Errors']:
-                                    log.error(f"Error deleting object {error.get('Key')}: {error.get('Message')}")
-                                raise TestExecError(f"Errors encountered during batch object deletion in bucket {bucket_name_to_create}")
-                            log.info(f"Objects deleted from bucket: {bucket_name_to_create}")
+                            if "Errors" in response and response["Errors"]:
+                                for error in response["Errors"]:
+                                    log.error(
+                                        f"Error deleting object {error.get('Key')}: {error.get('Message')}"
+                                    )
+                                raise TestExecError(
+                                    f"Errors encountered during batch object deletion in bucket {bucket_name_to_create}"
+                                )
+                            log.info(
+                                f"Objects deleted from bucket: {bucket_name_to_create}"
+                            )
                         except Exception as e:
-                            log.error(f"Failed to delete objects in bucket {bucket_name_to_create}: {e}")
+                            log.error(
+                                f"Failed to delete objects in bucket {bucket_name_to_create}: {e}"
+                            )
                             raise TestExecError(f"Failed to delete objects: {e}")
                     else:
-                        log.info(f"No objects to delete in bucket: {bucket_name_to_create}")
+                        log.info(
+                            f"No objects to delete in bucket: {bucket_name_to_create}"
+                        )
 
-                    # Verify objects are deleted by listing them
                     try:
-                        # Correct way to list objects using the bucket resource or client
-                        # Access the client from the bucket resource
-                        s3_client = rgw_conn.meta.client # This assumes rgw_conn is the s3.ServiceResource
-                                                          # If rgw_conn is the client directly, use rgw_conn.list_objects_v2
-                        
-                        # Use list_objects_v2 directly on the client
-                        objects_in_bucket_response = s3_client.list_objects_v2(Bucket=bucket_name_to_create)
-                        
+                        s3_client = rgw_conn.meta.client  #
+                        objects_in_bucket_response = s3_client.list_objects_v2(
+                            Bucket=bucket_name_to_create
+                        )
+
                         # Check if 'Contents' key exists and is not empty
-                        if objects_in_bucket_response and 'Contents' in objects_in_bucket_response and len(objects_in_bucket_response['Contents']) > 0:
-                            remaining_objects = [obj['Key'] for obj in objects_in_bucket_response['Contents']]
-                            log.error(f"Remaining objects after deletion: {remaining_objects}")
-                            raise TestExecError(f"Not all objects were deleted from bucket {bucket_name_to_create}")
+                        if (
+                            objects_in_bucket_response
+                            and "Contents" in objects_in_bucket_response
+                            and len(objects_in_bucket_response["Contents"]) > 0
+                        ):
+                            remaining_objects = [
+                                obj["Key"]
+                                for obj in objects_in_bucket_response["Contents"]
+                            ]
+                            log.error(
+                                f"Remaining objects after deletion: {remaining_objects}"
+                            )
+                            raise TestExecError(
+                                f"Not all objects were deleted from bucket {bucket_name_to_create}"
+                            )
                         else:
-                            log.info(f"Verified all objects deleted from bucket: {bucket_name_to_create}")
+                            log.info(
+                                f"Verified all objects deleted from bucket: {bucket_name_to_create}"
+                            )
                     except Exception as e:
-                        log.warning(f"Could not list objects after deletion (might be genuinely empty or other error): {e}")
-                        # If list_objects_v2 itself fails (e.g., bucket already deleted, which is a success condition here),
-                        # we should not necessarily fail the test, but log it.
+                        log.warning(
+                            f"Could not list objects after deletion (might be genuinely empty or other error): {e}"
+                        )
                         if "NoSuchBucket" in str(e):
-                            log.info(f"Bucket {bucket_name_to_create} is already gone, indicating objects were deleted with it.")
+                            log.info(
+                                f"Bucket {bucket_name_to_create} is already gone, indicating objects were deleted with it."
+                            )
                         else:
-                             raise TestExecError(f"Error during post-deletion object verification: {e}")
+                            raise TestExecError(
+                                f"Error during post-deletion object verification: {e}"
+                            )
 
                 # Delete buckets
                 log.info(f"Deleting bucket: {bucket_name_to_create}")
@@ -208,11 +251,108 @@ def perform_s3_operations(config, ssh_con, all_users_info, test_data_path):
                     {"obj": bucket, "resource": "delete"}
                 )
                 if bucket_deleted is False:
-                    raise TestExecError(f"Bucket deletion failed for {bucket_name_to_create}")
+                    raise TestExecError(
+                        f"Bucket deletion failed for {bucket_name_to_create}"
+                    )
                 log.info(f"Bucket deleted: {bucket_name_to_create}")
 
     log.info("S3 operations completed successfully.")
     return True
+
+
+def get_haproxy_monitor_password(ssh_con, rgw_node):
+    """Fetch HAProxy monitor password from haproxy.cfg in the container"""
+    log.info(f"Fetching HAProxy monitor password from node {rgw_node}")
+    try:
+
+        def _execute_remote_cmd(cmd, ssh_client, timeout=300):
+            log.info(f"Executing remote command on {rgw_node}: {cmd}")
+            stdin, stdout, stderr = ssh_client.exec_command(cmd, timeout=timeout)
+            stdout_str = stdout.read().decode("utf-8", errors="ignore").strip()
+            stderr_str = stderr.read().decode("utf-8", errors="ignore").strip()
+            return_code = stdout.channel.recv_exit_status()
+
+            if return_code != 0:
+                log.error(
+                    f"Remote command '{cmd}' failed on {rgw_node} with return code {return_code}. "
+                    f"STDOUT: '{stdout_str}', STDERR: '{stderr_str}'"
+                )
+                return stdout_str, stderr_str, return_code
+            else:
+                log.info(f"Remote command '{cmd}' succeeded. STDOUT: '{stdout_str}'")
+                if stderr_str:
+                    log.warning(
+                        f"Remote command '{cmd}' produced stderr despite success: {stderr_str}"
+                    )
+                return stdout_str, stderr_str, return_code
+
+        podman_ps_cmd = "sudo podman ps | grep haproxy"
+        podman_output, podman_stderr, podman_rc = _execute_remote_cmd(
+            podman_ps_cmd, ssh_client=ssh_con
+        )
+
+        if "haproxy" not in podman_output:
+            log.error(
+                f"HAProxy container not found in podman ps output on {rgw_node}. "
+                f"Return Code: {podman_rc}, STDOUT: '{podman_output}', STDERR: '{podman_stderr}'"
+            )
+            raise TestExecError(
+                f"No HAProxy container found running on RGW node {rgw_node}."
+            )
+
+        # Extract container name
+        container_name_match = re.search(r"(\S+).*haproxy", podman_output)
+        if not container_name_match:
+            log.error(
+                f"Failed to parse HAProxy container name from podman ps output on {rgw_node}: {podman_output}"
+            )
+            raise TestExecError(
+                "Failed to parse HAProxy container name from podman ps output."
+            )
+        container_name = container_name_match.group(1)
+        log.info(f"HAProxy container name: {container_name}")
+
+        # Read haproxy.cfg from container ---
+        haproxy_cfg_cmd = (
+            f"sudo podman exec {container_name} cat /var/lib/haproxy/haproxy.cfg"
+        )
+
+        # Use the _execute_remote_cmd
+        haproxy_cfg_output, haproxy_cfg_stderr, haproxy_cfg_rc = _execute_remote_cmd(
+            haproxy_cfg_cmd, ssh_client=ssh_con
+        )
+
+        if haproxy_cfg_rc != 0:
+            log.error(
+                f"Command '{haproxy_cfg_cmd}' failed on {rgw_node} with return code {haproxy_cfg_rc}. "
+                f"STDOUT: '{haproxy_cfg_output}', STDERR: '{haproxy_cfg_stderr}'"
+            )
+            raise TestExecError(
+                f"Failed to read HAProxy configuration file on {rgw_node}. Error: {haproxy_cfg_stderr if haproxy_cfg_stderr else 'Unknown'}"
+            )
+
+        password_match = re.search(r"stats auth admin:(\S+)", haproxy_cfg_output)
+        if not password_match:
+            log.error(
+                f"HAProxy monitor password not found in configuration from {rgw_node}. Full config content:\n{haproxy_cfg_output}"
+            )
+            raise TestExecError("HAProxy monitor password not found in configuration.")
+
+        password = password_match.group(1)
+        log.info(f"Successfully retrieved HAProxy monitor password from {rgw_node}")
+        return password
+
+    except TestExecError as e:
+        log.error(f"Failed to fetch HAProxy monitor password: {e.message}")
+        raise  # Re-raise your specific error
+    except Exception as e:
+        log.error(
+            f"An unexpected error occurred while fetching HAProxy monitor password from {rgw_node}: {str(e)}"
+        )
+        raise TestExecError(
+            f"Unable to retrieve HAProxy monitor password due to unexpected error: {str(e)}"
+        )
+
 
 def rgw_with_concentrators(ssh_con=None, rgw_node=None):
     """Verify if RGW and HAProxy are co-located on the same node"""
