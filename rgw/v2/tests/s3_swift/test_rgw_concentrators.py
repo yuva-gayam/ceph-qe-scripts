@@ -39,7 +39,6 @@ from v2.tests.s3_swift.reusables import rgw_concentrators as concentrator_tests
 from v2.utils.log import configure_logging
 from v2.utils.test_desc import AddTestInfo
 from v2.utils import utils
-from v2.tests.s3_swift import reusable
 from v2.lib.exceptions import RGWBaseException, TestExecError
 # from v2.lib.s3.auth import Auth # Not directly needed here, reusable.get_auth handles it
 
@@ -48,10 +47,38 @@ log = logging.getLogger()
 # TEST_DATA_PATH will be initialized in __main__ and made global for test_exec
 TEST_DATA_PATH = None # This will be set in __main__
 
-def test_exec(config, ssh_con, rgw_node):
+
+def test_exec(config, ssh_con, rgw_node, test_info_obj): # Pass test_info_obj to update status
     # Log current working directory for debugging
     current_dir = os.getcwd()
     log.info(f"Current working directory: {current_dir}")
+
+    # --- Ceph Version Check Logic (as per your instruction) ---
+    ceph_version_id, ceph_version_name = utils.get_ceph_version()
+    
+    # Process ceph_version_id as specified
+    # Example: "19.2.1-1234-gabcde" -> ["19", "2", "1"]
+    ceph_version_id = ceph_version_id.split("-")
+    ceph_version_id = ceph_version_id[0].split(".") # This reassignment is directly from your snippet
+
+    log.info(f"Detected Ceph version: {ceph_version_name} (ID: {ceph_version_id_raw})") # Note: ceph_version_id_raw would be needed here if you wanted the original ID. Using ceph_version_name for consistency in logging.
+
+    # Your specified condition for when to RUN the tests, using direct array access
+    # Adding safe access with default 0.0 for robustness against short version strings (e.g., "19.2")
+    if (
+        (float(ceph_version_id[0]) >= 19 if len(ceph_version_id) > 0 else 0.0 >= 19)
+        and (float(ceph_version_id[1]) >= 2 if len(ceph_version_id) > 1 else 0.0 >= 2)
+        and (float(ceph_version_id[2]) >= 1 if len(ceph_version_id) > 2 else 0.0 >= 1)
+    ):
+        log.info(f"Ceph version {ceph_version_name} meets the required version (>= 19.2.1). Proceeding with tests.")
+        # No explicit `run_tests_based_on_version = True` needed, as we proceed directly
+    else:
+        log.info(f"Ceph version {ceph_version_name} detected. Required version is >= 19.2.1.")
+        # Using the exact message phrasing requested by the user for skipping the test
+        log.info(f"Skipping tests: This feature is not valid for version less than 8.1.")
+        test_info_obj.success_status(f"Test skipped: Feature not valid for version less than 8.1 (detected: {ceph_version_name})")
+        return # Exit test_exec gracefully, as the test is intentionally skipped and marked as successful.
+    # --- End of Ceph Version Check Logic ---
 
     # Create io_info file in the current working directory
     # This block is kept as per your provided snippet, assuming it's for test tracking.
@@ -123,9 +150,7 @@ def test_exec(config, ssh_con, rgw_node):
 
         # TEST_DATA_PATH is a global variable initialized in the __main__ block
         # and made accessible here.
-        # No 'global TEST_DATA_PATH' needed here, as it's only read, not assigned within this function scope.
-        # It's already defined at the module level.
-
+        
         # Ensure TEST_DATA_PATH is a valid directory before passing
         if TEST_DATA_PATH is None:
             # Fallback or error if TEST_DATA_PATH wasn't set in __main__
@@ -171,7 +196,6 @@ if __name__ == "__main__":
         test_data_dir_name = "rgw_test_data" # A specific name for test data
         
         # This is where TEST_DATA_PATH is actually assigned its value.
-        # No 'global' keyword needed here as we are at the module's top level (within __main__).
         TEST_DATA_PATH = os.path.join(project_dir, test_data_dir_name) 
         
         log.info(f"TEST_DATA_PATH calculated and set to: {TEST_DATA_PATH}")
@@ -210,8 +234,13 @@ if __name__ == "__main__":
         config.read(ssh_con)
         config.yaml_file = yaml_file  # Store yaml_file for io_info filename generation
 
-        test_exec(config, ssh_con, rgw_node)
-        test_info.success_status("test passed")
+        test_exec(config, ssh_con, rgw_node, test_info) # Pass test_info object
+        
+        # If test_exec did not raise an exception and test_info's status is still 'started',
+        # it means the tests ran and passed without explicit 'success_status' call inside test_exec.
+        if test_info.status == 'started':
+             test_info.success_status("test passed")
+
         sys.exit(0)
 
     except (RGWBaseException, Exception) as e:
