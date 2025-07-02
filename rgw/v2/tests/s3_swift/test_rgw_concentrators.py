@@ -43,6 +43,7 @@ from v2.tests.s3_swift.reusables import rgw_concentrators as concentrator_tests
 from v2.utils import utils
 from v2.utils.log import configure_logging
 from v2.utils.test_desc import AddTestInfo
+from v2.lib.exceptions import TestExecError
 
 log = logging.getLogger()
 TEST_DATA_PATH = None
