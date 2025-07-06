@@ -378,8 +378,9 @@ def rgw_daemons_status(retry_attempts=8, retry_delay=15):
                 log.warning("No RGW services found in ceph orch ls")
                 raise TestExecError("No RGW services found")
 
-            expected_daemons = orch_ls_output[0]["status"]["size"]
-            running_daemons_from_ls = orch_ls_output[0]["status"]["running"]
+            # Sum expected and running daemons across all RGW services
+            expected_daemons = sum(service["status"]["size"] for service in orch_ls_output)
+            running_daemons_from_ls = sum(service["status"]["running"] for service in orch_ls_output)
             log.info(
                 f"Expected RGW daemons: {expected_daemons}, Running: {running_daemons_from_ls}"
             )
@@ -396,7 +397,7 @@ def rgw_daemons_status(retry_attempts=8, retry_delay=15):
                 log.warning("No RGW daemons found in ceph -s --format json output")
                 raise TestExecError("No RGW daemons found in ceph -s")
 
-            # Count unique RGW daemon IDs (each line is a daemon ID)
+            # Count unique RGW daemon IDs
             ceph_s_daemons = len(
                 [line for line in ceph_s_output.strip().split("\n") if line.strip()]
             )
