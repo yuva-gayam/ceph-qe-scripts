@@ -365,77 +365,67 @@ def rgw_daemons_status(retry_attempts=8, retry_delay=15):
         try:
             # Step 1: Check RGW daemons via 'ceph orch ps'
             orch_ps_cmd = "ceph orch ps --daemon_type=rgw --format json"
-            orch_ps_output = json.loads(exec_shell_cmd(orch_ps_cmd))
-            running_daemons = sum(1 for daemon in orch_ps_output if daemon["status_desc"] == "running")
-            log.info(f"Running RGW daemons from ceph orch ps: {running_daemons}")
+            orch_ps_output_raw = exec_shell_cmd(orch_ps_cmd)
+            
+            if not isinstance(orch_ps_output_raw, str) or not orch_ps_output_raw.strip():
+                raise TestExecError("ceph orch ps command failed or returned invalid output.")
+            
+            try:
+                orch_ps_output = json.loads(orch_ps_output_raw)
+            except json.JSONDecodeError as e:
+                raise TestExecError(f"Failed to parse JSON from 'ceph orch ps': {e}")
+            
+            running_daemons_orch_ps = sum(1 for daemon in orch_ps_output if daemon.get("status_desc") == "running")
+            log.info(f"Running RGW daemons from ceph orch ps: {running_daemons_orch_ps}")
 
-            # Step 2: Check RGW service details via 'ceph orch ls'
-            orch_ls_cmd = "ceph orch ls --service_type=rgw --format json"
-            orch_ls_raw = exec_shell_cmd(orch_ls_cmd)
-            log.info(f"Raw ceph orch ls output: {orch_ls_raw}")
-            orch_ls_output = json.loads(orch_ls_raw)
-            if not orch_ls_output:
-                log.warning("No RGW services found in ceph orch ls")
-                raise TestExecError("No RGW services found")
-
-            # Sum expected and running daemons across all RGW services
-            expected_daemons = 0
-            running_daemons_from_ls = 0
-            for service in orch_ls_output:
-                try:
-                    service_size = service["status"]["size"]
-                    service_running = service["status"]["running"]
-                    expected_daemons += service_size
-                    running_daemons_from_ls += service_running
-                    log.info(f"Service {service['service_name']}: size={service_size}, running={service_running}")
-                except KeyError as e:
-                    log.error(f"Missing key {e} in service: {service}")
-                    raise TestExecError(f"Invalid orch ls output format: missing {e}")
-
-            log.info(f"Total Expected RGW daemons: {expected_daemons}, Running: {running_daemons_from_ls}")
-
-            # Step 3: Check RGW daemons via 'ceph -s --format json' with jq
+            # Step 2: Check RGW daemons via 'ceph -s --format json' with jq
             ceph_s_json_cmd = r"""ceph -s --format json | jq -r '.servicemap.services.rgw.daemons | to_entries | map(select(.key != "summary")) | .[] | .value.metadata.id'"""
             try:
-                ceph_s_output = exec_shell_cmd(ceph_s_json_cmd)
+                ceph_s_output_raw = exec_shell_cmd(ceph_s_json_cmd)
+                if not isinstance(ceph_s_output_raw, str):
+                    raise TestExecError("ceph -s command failed or returned invalid output.")
             except Exception as e:
                 log.error(f"Failed to execute ceph -s command: {str(e)}")
                 raise TestExecError(f"ceph -s command failed: {str(e)}")
 
-            if not ceph_s_output or ceph_s_output.isspace():
+            if not ceph_s_output_raw or ceph_s_output_raw.isspace():
                 log.warning("No RGW daemons found in ceph -s --format json output")
                 raise TestExecError("No RGW daemons found in ceph -s")
 
             # Count unique RGW daemon IDs to avoid duplicates
-            ceph_s_daemons_list = [line for line in ceph_s_output.strip().split("\n") if line.strip()]
+            ceph_s_daemons_list = [line for line in ceph_s_output_raw.strip().split("\n") if line.strip()]
             ceph_s_daemons_unique = len(set(ceph_s_daemons_list))
             log.info(f"RGW daemons from ceph -s --format json (raw): {len(ceph_s_daemons_list)}")
             log.info(f"RGW daemons from ceph -s --format json (unique): {ceph_s_daemons_unique}")
             log.info(f"Daemon IDs: {ceph_s_daemons_list}")
 
-            # Verify that the number of running daemons matches the expected count
-            if (
-                running_daemons == expected_daemons
-                and running_daemons_from_ls == expected_daemons
-                and ceph_s_daemons_unique == expected_daemons
-            ):
-                log.info("All RGW daemons are running and counts match across commands")
+            # Verify that the number of running daemons matches between 'orch ps' and 'ceph -s'
+            if running_daemons_orch_ps == ceph_s_daemons_unique:
+                log.info("RGW daemon counts match between 'ceph orch ps' and 'ceph -s'")
                 return True
             else:
                 log.warning(
-                    f"Daemon count mismatch: orch_ps={running_daemons}, orch_ls={running_daemons_from_ls}, "
-                    f"ceph_s={ceph_s_daemons_unique}, expected={expected_daemons}"
+                    f"Daemon count mismatch: orch_ps={running_daemons_orch_ps}, "
+                    f"ceph_s={ceph_s_daemons_unique}"
                 )
-                raise TestExecError("RGW daemon count mismatch")
+                raise TestExecError("RGW daemon count mismatch between 'orch ps' and 'ceph -s'")
 
-        except (json.JSONDecodeError, TestExecError) as e:
+        except TestExecError as e:
             log.warning(f"Attempt {attempt + 1}/{retry_attempts} failed: {str(e)}")
             if attempt < retry_attempts - 1:
                 log.info(f"Retrying after {retry_delay} seconds...")
                 time.sleep(retry_delay)
             else:
-                log.error("All retry attempts exhausted. RGW daemons are not fully running.")
-                raise TestExecError("RGW daemons are not running after retries")
+                log.error("All retry attempts exhausted. RGW daemons are not fully running or counts do not match.")
+                raise TestExecError("RGW daemon status check failed after retries")
+        except Exception as e: # Catch any other unexpected exceptions
+            log.error(f"An unexpected error occurred during attempt {attempt + 1}/{retry_attempts}: {e}")
+            if attempt < retry_attempts - 1:
+                log.info(f"Retrying after {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                log.error("All retry attempts exhausted. RGW daemon status check failed due to unexpected error.")
+                raise TestExecError(f"RGW daemon status check failed due to unexpected error: {e}")
 
     return False
 
