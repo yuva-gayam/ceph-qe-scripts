@@ -208,9 +208,7 @@ def create_bucket(bucket_name, rgw, user_info, location=None):
     )
     log.info(f"Bucket creation response: {created}")
     if created is False:
-        log.info(
-            f"Bucket creation failed for {bucket_name} with status code {status_code}"
-        )
+        log.info(f"Bucket creation failed for {bucket_name}")
         log.info(
             "Checking RGW daemon status with 'ceph orch ps | grep rgw' due to bucket creation failure"
         )
