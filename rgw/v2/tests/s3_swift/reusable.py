@@ -223,7 +223,7 @@ def create_bucket(bucket_name, rgw, user_info, location=None):
 
     if created is not None:
         response = HttpResponseParser(created)
-        if status_code == 200:
+        if response.status_code == 200:
             log.info(f"Bucket {bucket_name} created successfully")
         else:
             log.info(
