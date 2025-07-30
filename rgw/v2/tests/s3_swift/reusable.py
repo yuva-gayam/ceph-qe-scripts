@@ -206,18 +206,37 @@ def create_bucket(bucket_name, rgw, user_info, location=None):
             "extra_info": {"access_key": user_info["access_key"]},
         }
     )
-    log.info(f"bucket creation data: {created}")
+    log.info(f"Bucket creation response: {created}")
     if created is False:
-        raise TestExecError("Resource execution failed: bucket creation failed")
+        log.info(
+            f"Bucket creation failed for {bucket_name} with status code {status_code}"
+        )
+        log.info(
+            "Checking RGW daemon status with 'ceph orch ps | grep rgw' due to bucket creation failure"
+        )
+        rgw_status = utils.exec_shell_cmd("ceph orch ps | grep rgw")
+        log.info(f"RGW daemon status output: {rgw_status}")
+        if not rgw_status or "running" not in rgw_status.lower():
+            raise TestExecError("RGW daemons are not running or not found")
+        log.info("RGW daemons are running")
+        raise TestExecError(f"Bucket creation failed for {bucket_name}")
+
     if created is not None:
         response = HttpResponseParser(created)
-        if response.status_code == 200:
-            log.info("bucket created")
+        if status_code == 200:
+            log.info(f"Bucket {bucket_name} created successfully")
         else:
-            raise TestExecError("bucket creation failed")
-    else:
-        raise TestExecError("bucket creation failed")
-
+            log.info(
+                "Checking RGW daemon status with 'ceph orch ps | grep rgw' due to bucket creation failure"
+            )
+            rgw_status = utils.exec_shell_cmd("ceph orch ps | grep rgw")
+            log.info(f"RGW daemon status output: {rgw_status}")
+            if not rgw_status or "running" not in rgw_status.lower():
+                raise TestExecError("RGW daemons are not running or not found")
+            log.info("RGW daemons are running")
+            raise TestExecError(
+                f"Bucket creation failed for {bucket_name} with status code {status_code}"
+            )
     is_multisite = utils.is_cluster_multisite()
     if is_multisite:
         log.info("Cluster is multisite")
@@ -3361,29 +3380,3 @@ def get_auth(user_info, ssh_con, ssl, haproxy):
     rgw_service_port = get_rgw_service_port()
     haproxy = False if rgw_service_port == 443 else haproxy
     return Auth(user_info, ssh_con, ssl=ssl, haproxy=haproxy)
-
-
-def verify_object_accessibility(s3_client, bucket_name, object_key):
-    """
-    Verify if the object can be accessed from the bucket.
-    """
-    try:
-        response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-        if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
-            log.info(f"Object {object_key} is accessible post reshard.")
-        else:
-            log.error(
-                f"Object {object_key} not accessible. Status: {response['ResponseMetadata']['HTTPStatusCode']}"
-            )
-    except Exception as e:
-        log.error(f"Failed to access object {object_key}: {e}")
-        raise
-
-
-def list_bucket_objects(rgw_s3_client, bucket_name):
-    """
-    returns all of the objects in the bucket
-    """
-    resp = rgw_s3_client.list_objects(Bucket=bucket_name)
-    log.info(f"list bucket objects response: {resp}")
-    return resp["Contents"]
