@@ -214,6 +214,8 @@ def create_bucket(bucket_name, rgw, user_info, location=None):
         )
         rgw_status = utils.exec_shell_cmd("ceph orch ps | grep rgw")
         log.info(f"RGW daemon status output: {rgw_status}")
+        ceph_status = utils.exec_shell_cmd("ceph -s")
+        log.info(f"ceph status is {ceph_status}")
         if not rgw_status or "running" not in rgw_status.lower():
             raise TestExecError("RGW daemons are not running or not found")
         log.info("RGW daemons are running")
