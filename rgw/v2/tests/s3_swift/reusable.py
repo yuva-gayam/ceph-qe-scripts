@@ -189,7 +189,13 @@ def create_rgw_account_with_iam_user(
 
 
 def create_bucket(bucket_name, rgw, user_info, location=None):
-    log.info("creating bucket with name: %s" % bucket_name)
+    
+    log.info("creating bucket with name before that check ceph -s and ceph orch ps: %s" % bucket_name)
+    log.info("Checking RGW daemon status with 'ceph orch ps | grep rgw' due to bucket creation failure")
+    rgw_status = utils.exec_shell_cmd("ceph orch ps | grep rgw")
+    log.info(f"RGW daemon status output: {rgw_status}")
+    ceph_status = utils.exec_shell_cmd("ceph -s")
+    log.info(f"ceph status is {ceph_status}")
     # bucket = s3_ops.resource_op(rgw_conn, 'Bucket', bucket_name_to_create)
     bucket = s3lib.resource_op(
         {"obj": rgw, "resource": "Bucket", "args": [bucket_name]}
@@ -216,6 +222,7 @@ def create_bucket(bucket_name, rgw, user_info, location=None):
         log.info(f"RGW daemon status output: {rgw_status}")
         ceph_status = utils.exec_shell_cmd("ceph -s")
         log.info(f"ceph status is {ceph_status}")
+        
         if not rgw_status or "running" not in rgw_status.lower():
             raise TestExecError("RGW daemons are not running or not found")
         log.info("RGW daemons are running")
