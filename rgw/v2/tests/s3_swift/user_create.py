@@ -43,12 +43,18 @@ def test_exec(config, ssh_con):
         test_info.started_info()
         # create a non-tenanted user
         if config.user_type == "non-tenanted":
+            utils.exec_shell_cmd(f"ceph config set client.rgw_rgw.rgw.all log_to_file true && ceph config set client.rgw_rgw.rgw.all debug_rgw 20")
+            utils.exec_shell_cmd(f"ceph config set client.rgw log_to_file true")
+            utils.exec_shell_cmd(f"ceph config set client.rgw debug_rgw 20")
             all_users_info = s3lib.create_users(config.user_count)
             with open(user_detail_file, "w") as fout:
                 json.dump(all_users_info, fout)
             test_info.success_status("non-tenanted users creation completed")
         else:
             log.info("create tenanted users")
+            utils.exec_shell_cmd(f"ceph config set client.rgw_rgw.rgw.all log_to_file true && ceph config set client.rgw_rgw.rgw.all debug_rgw 20")
+            utils.exec_shell_cmd(f"ceph config set client.rgw log_to_file true")
+            utils.exec_shell_cmd(f"ceph config set client.rgw debug_rgw 20")
             for i in range(config.user_count):
                 tenant_name = "tenant" + str(i)
                 all_users_info = s3lib.create_tenant_users(
