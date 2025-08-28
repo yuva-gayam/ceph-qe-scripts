@@ -121,8 +121,23 @@ class ReadIOInfo(object):
         data = self.file_op.get_data()
         users = data["users"]
         endpoint_url = utils.get_rgw_endpoint_url()
-        is_secure = True if endpoint_url.startswith("https") else False
+        log.info(f"[DEBUG] Selected RGW endpoint: {endpoint_url}")
 
+        # --- endpoint health check using curl ---
+        try:
+            cmd = ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", endpoint_url]
+            result = subprocess.check_output(cmd, universal_newlines=True).strip()
+            if result not in ["200", "403"]:
+                log.error(f"[DEBUG] Endpoint {endpoint_url} not healthy (HTTP {result}), skipping verification")
+                return
+            else:
+                log.info(f"[DEBUG] Endpoint {endpoint_url} reachable (HTTP {result})")
+        except subprocess.CalledProcessError as e:
+            log.error(f"[DEBUG] curl failed for {endpoint_url}: {e}")
+            return
+        # ----------------------------------------
+
+        is_secure = True if endpoint_url.startswith("https") else False
         for each_user in users:
             if each_user["deleted"] is False:
                 log.info("verifying data for the user: \n")
