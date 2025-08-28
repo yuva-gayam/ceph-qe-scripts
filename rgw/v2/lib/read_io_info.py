@@ -123,19 +123,28 @@ class ReadIOInfo(object):
         endpoint_url = utils.get_rgw_endpoint_url()
         log.info(f"[DEBUG] Selected RGW endpoint: {endpoint_url}")
 
-        # --- endpoint health check using curl ---
-        try:
-            cmd = ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", endpoint_url]
-            result = subprocess.check_output(cmd, universal_newlines=True).strip()
-            if result not in ["200", "403"]:
-                log.error(f"[DEBUG] Endpoint {endpoint_url} not healthy (HTTP {result}), skipping verification")
-                return
-            else:
-                log.info(f"[DEBUG] Endpoint {endpoint_url} reachable (HTTP {result})")
-        except subprocess.CalledProcessError as e:
-            log.error(f"[DEBUG] curl failed for {endpoint_url}: {e}")
-            return
-        # ----------------------------------------
+        # --- endpoint health check with retry loop ---
+        success = False
+        for attempt in range(12):  # 12 retries
+            try:
+                cmd = ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}", endpoint_url]
+                result = subprocess.check_output(cmd, universal_newlines=True).strip()
+                if result in ["200", "403"]:
+                    log.info(f"[DEBUG] Endpoint {endpoint_url} reachable (HTTP {result}) on attempt {attempt+1}")
+                    success = True
+                    break
+                else:
+                    log.warning(f"[DEBUG] Attempt {attempt+1}: endpoint {endpoint_url} not healthy (HTTP {result})")
+            except subprocess.CalledProcessError as e:
+                log.warning(f"[DEBUG] Attempt {attempt+1}: curl failed for {endpoint_url}: {e}")
+
+            time.sleep(5)  # wait 5s before retry
+
+        if not success:
+            log.warning(f"[DEBUG] Endpoint {endpoint_url} not reachable after 12 attempts. Proceeding anyway.")
+        # ------------------------------------------------
+
+        is_secure = True if endpoint_url.startswith("https") else False
 
         is_secure = True if endpoint_url.startswith("https") else False
         for each_user in users:
