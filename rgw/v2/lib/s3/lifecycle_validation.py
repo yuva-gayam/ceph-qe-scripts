@@ -218,6 +218,10 @@ def validate_prefix_rule(bucket, config):
     else:
         log.info("Start the validation of LC expiration.")
 
+        # Wait for lifecycle process to complete before validation
+        log.info("Sleeping for 60 seconds to allow lifecycle process to complete")
+        time.sleep(60)
+
         c1 = 0
         if objects == objs_total:
             for i, entry in enumerate(json_doc2):
