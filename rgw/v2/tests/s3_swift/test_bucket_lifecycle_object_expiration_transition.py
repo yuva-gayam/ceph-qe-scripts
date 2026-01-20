@@ -524,8 +524,8 @@ def test_exec(config, ssh_con):
                             ] = expected_storage_class
                             lc_ops.validate_prefix_rule(bucket, config)
                         else:
-                            log.info("sleeping for 60 seconds")
-                            time.sleep(60)
+                            log.info("sleeping for 90 seconds")
+                            time.sleep(90)
                             lc_ops.validate_prefix_rule(bucket, config)
 
                         if config.test_ops["delete_marker"] is True:
