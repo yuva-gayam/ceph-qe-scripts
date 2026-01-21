@@ -217,14 +217,35 @@ def validate_prefix_rule(bucket, config):
                 raise AssertionError("lc validation for object transition failed")
     else:
         log.info("Start the validation of LC expiration.")
-        log.info("Sleeping for 90 seconds to allow lifecycle process to complete")
-        time.sleep(90)
+
         c1 = 0
+        # Track the current version (highest versioned_epoch) for each object
+        object_current_versions = {}
         if objects == objs_total:
             for i, entry in enumerate(json_doc2):
                 print(entry["tag"])
-                if entry["tag"] == "delete-marker":
-                    c1 = c1 + 1
+                obj_name = entry["name"]
+                versioned_epoch = entry.get("versioned_epoch", 0)
+                is_delete_marker = entry["tag"] == "delete-marker"
+                
+                # Track the highest versioned_epoch for each object to find current version
+                if obj_name not in object_current_versions:
+                    object_current_versions[obj_name] = {
+                        "versioned_epoch": versioned_epoch,
+                        "is_delete_marker": is_delete_marker
+                    }
+                elif versioned_epoch > object_current_versions[obj_name]["versioned_epoch"]:
+                    # This is a newer version, update the current version info
+                    object_current_versions[obj_name] = {
+                        "versioned_epoch": versioned_epoch,
+                        "is_delete_marker": is_delete_marker
+                    }
+            
+            # Count objects where current version (highest epoch) is a delete marker
+            for obj_name, version_info in object_current_versions.items():
+                if version_info["is_delete_marker"]:
+                    c1 += 1
+            
             if c1 != (config.objects_count):
                 raise AssertionError(
                     "Lifecycle expiration of current object version for prefix filter failed"
