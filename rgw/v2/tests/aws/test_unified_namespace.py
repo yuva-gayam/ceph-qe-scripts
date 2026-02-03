@@ -17,7 +17,10 @@ import base64
 import json
 import logging
 import os
+import platform
 import random
+import socket
+import subprocess
 import sys
 import time
 import traceback
@@ -38,6 +41,73 @@ from v2.utils.test_desc import AddTestInfo
 log = logging.getLogger(__name__)
 TEST_DATA_PATH = None
 
+# Keystone API default port for reachability check
+KEYSTONE_API_PORT = 5000
+
+
+def check_keystone_reachable(keystone_server, keystone_port=KEYSTONE_API_PORT):
+    """
+    Check if Keystone IP/host is reachable both without port (ping) and with port (TCP).
+    Proceed only if at least one check succeeds.
+
+    Returns:
+        tuple: (bool reachable, str message)
+    """
+    ping_ok = False
+    port_ok = False
+
+    # 1. Without port: ICMP ping to host only
+    log.info(f"Checking Keystone without port (ping): {keystone_server}")
+    try:
+        timeout_flag = "-t" if platform.system() == "Darwin" else "-W"
+        ping_cmd = ["ping", "-c", "1", timeout_flag, "2", keystone_server]
+        result = subprocess.run(
+            ping_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            ping_ok = True
+            log.info(f"Without port: Keystone server {keystone_server} is pingable")
+        else:
+            log.info(
+                f"Without port: Ping to {keystone_server} failed "
+                f"(returncode={result.returncode})"
+            )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        log.info(f"Without port: Ping check failed for {keystone_server}: {e}")
+
+    # 2. With port: TCP connect to Keystone API port
+    log.info(f"Checking Keystone with port (TCP): {keystone_server}:{keystone_port}")
+    try:
+        with socket.create_connection((keystone_server, keystone_port), timeout=3):
+            port_ok = True
+            log.info(
+                f"With port: Keystone server {keystone_server}:{keystone_port} "
+                "is reachable (TCP)"
+            )
+    except (socket.timeout, socket.error, OSError) as e:
+        log.info(
+            f"With port: TCP connect to {keystone_server}:{keystone_port} failed: {e}"
+        )
+
+    if ping_ok or port_ok:
+        parts = []
+        if ping_ok:
+            parts.append(f"Keystone IP {keystone_server} is pingable (without port)")
+        if port_ok:
+            parts.append(
+                f"Keystone URL {keystone_server}:{keystone_port} is reachable (with port)"
+            )
+        return True, "; ".join(parts)
+
+    return False, (
+        f"Keystone server {keystone_server}: "
+        f"without port (ping)=not reachable, "
+        f"with port ({keystone_port})=not reachable. Skipping test."
+    )
+
 
 def test_exec(config, ssh_con):
     """
@@ -56,11 +126,17 @@ def test_exec(config, ssh_con):
         3
     ]
     keystone_server = keystone_url.replace("http://", "").split(":")[0]
+
+    # Check if Keystone IP/URL is reachable before proceeding
+    reachable, msg = check_keystone_reachable(keystone_server)
+    if not reachable:
+        log.error(msg)
+        raise RGWBaseException(msg)
+    log.info(msg)
+
     # Put keystone conf options for user demo and implicit tenants Swift only
     log.info("Interating with Keystone for implicit tenants Swift only")
-    aws_reusable.put_keystone_conf(
-        rgw_service_name, "demo", "admin123", "demo", "swift"
-    )
+    aws_reusable.put_keystone_conf(rgw_service_name, "demo", "demo1", "demo", "swift")
 
     access_demo, secret_demo, project_demo = aws_reusable.get_ec2_details(
         keystone_server, "demo"
@@ -110,7 +186,7 @@ def test_exec(config, ssh_con):
         log.info(f"Listing bucket {bucket_name}: {out}")
 
     log.info("Switching to implicit Tenant S3 only")
-    aws_reusable.put_keystone_conf(rgw_service_name, "demo", "admin123", "demo", "s3")
+    aws_reusable.put_keystone_conf(rgw_service_name, "demo", "demo1", "demo", "s3")
     cmd = f"AWS_ACCESS_KEY_ID={access_demo} AWS_SECRET_ACCESS_KEY={secret_demo} /usr/local/bin/aws s3 ls --endpoint http://{rgw_ip}:{rgw_port}"
     utils.exec_shell_cmd(cmd)
     time.sleep(2)
