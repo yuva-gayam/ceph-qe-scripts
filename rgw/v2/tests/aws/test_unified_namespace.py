@@ -48,7 +48,7 @@ KEYSTONE_API_PORT = 5000
 def check_keystone_reachable(keystone_server, keystone_port=KEYSTONE_API_PORT):
     """
     Check if Keystone IP/host is reachable both without port (ping) and with port (TCP).
-    Proceed only if at least one check succeeds.
+    Proceed only if BOTH checks succeed (test needs Keystone API on port and SSH to host).
 
     Returns:
         tuple: (bool reachable, str message)
@@ -92,20 +92,20 @@ def check_keystone_reachable(keystone_server, keystone_port=KEYSTONE_API_PORT):
             f"With port: TCP connect to {keystone_server}:{keystone_port} failed: {e}"
         )
 
-    if ping_ok or port_ok:
-        parts = []
-        if ping_ok:
-            parts.append(f"Keystone IP {keystone_server} is pingable (without port)")
-        if port_ok:
-            parts.append(
-                f"Keystone URL {keystone_server}:{keystone_port} is reachable (with port)"
-            )
-        return True, "; ".join(parts)
+    if ping_ok and port_ok:
+        return True, (
+            f"Keystone IP {keystone_server} is pingable (without port) and "
+            f"Keystone URL {keystone_server}:{keystone_port} is reachable (with port). Proceeding."
+        )
 
+    # Build failure message from what failed
+    failures = []
+    if not ping_ok:
+        failures.append("without port (ping)=not reachable")
+    if not port_ok:
+        failures.append(f"with port ({keystone_port})=not reachable")
     return False, (
-        f"Keystone server {keystone_server}: "
-        f"without port (ping)=not reachable, "
-        f"with port ({keystone_port})=not reachable. Skipping test."
+        f"Keystone server {keystone_server}: {', '.join(failures)}. Skipping test."
     )
 
 
