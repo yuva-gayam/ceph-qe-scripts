@@ -1002,9 +1002,18 @@ def put_keystone_conf(rgw_service_name, user, passw, project, tenant="true"):
     Apply the conf options required for keystone integration to rgw service
     """
     log.info("Apply keystone conf options")
-    utils.exec_shell_cmd(
-        f"ceph config set client.{rgw_service_name} rgw_keystone_api_version 3"
-    )
+    # rgw_keystone_api_version was removed in newer Ceph (e.g. 20.x); set if supported
+    try:
+        utils.exec_shell_cmd(
+            f"ceph config set client.{rgw_service_name} rgw_keystone_api_version 3"
+        )
+    except Exception as e:
+        if "unrecognized config option" in str(e).lower() or "einval" in str(e).lower():
+            log.info(
+                "rgw_keystone_api_version not supported in this Ceph version, skipping"
+            )
+        else:
+            raise
     utils.exec_shell_cmd(
         f"ceph config set client.{rgw_service_name} rgw_keystone_admin_user {user}"
     )
