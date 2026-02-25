@@ -52,13 +52,21 @@ def create_bucket(aws_auth, bucket_name, end_point, retries=3, wait_time=5):
         operation="create-bucket",
         params=[f"--bucket {bucket_name} --endpoint-url {end_point}"],
     )
-    try:
-        create_response = utils.exec_shell_cmd(command, return_err=True)
-        log.info(f"bucket creation response is {create_response}")
-        if create_response:
-            raise Exception(f"Create bucket failed for {bucket_name}")
-    except Exception as e:
-        raise AWSCommandExecError(message=str(e))
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            create_response = utils.exec_shell_cmd(command)
+            log.info(f"bucket creation response is {create_response}")
+            return
+        except Exception as e:
+            last_error = e
+            log.warning(
+                f"Attempt {attempt}: Create bucket {bucket_name} failed: {e}. "
+                f"Retrying in {wait_time}s..."
+            )
+            if attempt < retries:
+                time.sleep(wait_time)
+    raise AWSCommandExecError(message=str(last_error))
 
 
 def delete_bucket(aws_auth, bucket_name, end_point):
@@ -1002,9 +1010,13 @@ def put_keystone_conf(rgw_service_name, user, passw, project, tenant="true"):
     Apply the conf options required for keystone integration to rgw service
     """
     log.info("Apply keystone conf options")
-    utils.exec_shell_cmd(
-        f"ceph config set client.{rgw_service_name} rgw_keystone_api_version 3"
-    )
+    ceph_version_id, version_name = utils.get_ceph_version()
+    ceph_version_id = ceph_version_id.split("-")[0]
+    ceph_version_id = ceph_version_id.split(".")[0]
+    if ceph_version_id < "20":
+        utils.exec_shell_cmd(
+            f"ceph config set client.{rgw_service_name} rgw_keystone_api_version 3"
+        )
     utils.exec_shell_cmd(
         f"ceph config set client.{rgw_service_name} rgw_keystone_admin_user {user}"
     )
