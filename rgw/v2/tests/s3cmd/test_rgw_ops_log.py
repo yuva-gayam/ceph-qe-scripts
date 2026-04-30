@@ -115,8 +115,6 @@ def test_exec(config, ssh_con):
             )
             opslog_out, _ = pr.communicate()
             opslog_out = opslog_out.decode("utf-8", errors="ignore")
-            if not opslog_out.strip():
-                raise TestExecError("opslog returned empty data for create_bucket")
             opslog_out = str(opslog_out).split(",\n")[0] + "]"
             data = json.loads(opslog_out)
             log.info(f"opslog for operation create_bucket is {data}")
@@ -138,8 +136,6 @@ def test_exec(config, ssh_con):
             )
             opslog_out, _ = pr.communicate()
             opslog_out = opslog_out.decode("utf-8", errors="ignore")
-            if not opslog_out.strip():
-                raise TestExecError("opslog returned empty data for upload_object")
             opslog_out = str(opslog_out).split(",\n")[0] + "]"
             data = json.loads(opslog_out)
             log.info(f"opslog for operation upload object is {data}")
@@ -158,8 +154,6 @@ def test_exec(config, ssh_con):
             )
             opslog_out, _ = pr.communicate()
             opslog_out = opslog_out.decode("utf-8", errors="ignore")
-            if not opslog_out.strip():
-                raise TestExecError("opslog returned empty data for list_objects")
             opslog_out = str(opslog_out).split(",\n")[0] + "]"
             data = json.loads(opslog_out)
             log.info(f"opslog for list_object is : {data}")
