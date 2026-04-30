@@ -115,8 +115,27 @@ def test_exec(config, ssh_con):
             )
             opslog_out, _ = pr.communicate()
             opslog_out = opslog_out.decode("utf-8", errors="ignore")
-            opslog_out = str(opslog_out).split(",\n")[0] + "]"
-            data = json.loads(opslog_out)
+            
+            # Check if opslog_out is empty or contains no valid data
+            if not opslog_out or opslog_out.strip() == "":
+                log.error("No data received from opslog socket")
+                raise TestExecError("opslog socket returned empty data")
+            
+            # Try to parse the opslog output
+            try:
+                # Handle incomplete JSON by wrapping in array brackets if needed
+                opslog_out = opslog_out.strip()
+                if not opslog_out.startswith("["):
+                    opslog_out = "[" + opslog_out
+                if not opslog_out.endswith("]"):
+                    # Remove trailing comma if present and add closing bracket
+                    opslog_out = opslog_out.rstrip(",\n") + "]"
+                
+                data = json.loads(opslog_out)
+            except json.JSONDecodeError as e:
+                log.error(f"Failed to parse opslog output: {e}")
+                log.error(f"Raw opslog output: {repr(opslog_out)}")
+                raise TestExecError(f"Failed to parse opslog JSON: {e}")
             log.info(f"opslog for operation create_bucket is {data}")
             log.info(f"Uri is {data[0]['uri']}")
 
@@ -136,8 +155,27 @@ def test_exec(config, ssh_con):
             )
             opslog_out, _ = pr.communicate()
             opslog_out = opslog_out.decode("utf-8", errors="ignore")
-            opslog_out = str(opslog_out).split(",\n")[0] + "]"
-            data = json.loads(opslog_out)
+            
+            # Check if opslog_out is empty or contains no valid data
+            if not opslog_out or opslog_out.strip() == "":
+                log.error("No data received from opslog socket for upload operation")
+                raise TestExecError("opslog socket returned empty data for upload operation")
+            
+            # Try to parse the opslog output
+            try:
+                # Handle incomplete JSON by wrapping in array brackets if needed
+                opslog_out = opslog_out.strip()
+                if not opslog_out.startswith("["):
+                    opslog_out = "[" + opslog_out
+                if not opslog_out.endswith("]"):
+                    # Remove trailing comma if present and add closing bracket
+                    opslog_out = opslog_out.rstrip(",\n") + "]"
+                
+                data = json.loads(opslog_out)
+            except json.JSONDecodeError as e:
+                log.error(f"Failed to parse opslog output for upload: {e}")
+                log.error(f"Raw opslog output: {repr(opslog_out)}")
+                raise TestExecError(f"Failed to parse opslog JSON for upload: {e}")
             log.info(f"opslog for operation upload object is {data}")
             log.info(f"Uri is {data[0]['uri']}")
 
@@ -154,8 +192,27 @@ def test_exec(config, ssh_con):
             )
             opslog_out, _ = pr.communicate()
             opslog_out = opslog_out.decode("utf-8", errors="ignore")
-            opslog_out = str(opslog_out).split(",\n")[0] + "]"
-            data = json.loads(opslog_out)
+            
+            # Check if opslog_out is empty or contains no valid data
+            if not opslog_out or opslog_out.strip() == "":
+                log.error("No data received from opslog socket for list operation")
+                raise TestExecError("opslog socket returned empty data for list operation")
+            
+            # Try to parse the opslog output
+            try:
+                # Handle incomplete JSON by wrapping in array brackets if needed
+                opslog_out = opslog_out.strip()
+                if not opslog_out.startswith("["):
+                    opslog_out = "[" + opslog_out
+                if not opslog_out.endswith("]"):
+                    # Remove trailing comma if present and add closing bracket
+                    opslog_out = opslog_out.rstrip(",\n") + "]"
+                
+                data = json.loads(opslog_out)
+            except json.JSONDecodeError as e:
+                log.error(f"Failed to parse opslog output for list: {e}")
+                log.error(f"Raw opslog output: {repr(opslog_out)}")
+                raise TestExecError(f"Failed to parse opslog JSON for list: {e}")
             log.info(f"opslog for list_object is : {data}")
             log.info(f"Uri is {data[0]['uri']}")
 
