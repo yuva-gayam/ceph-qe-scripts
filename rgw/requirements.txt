@@ -8,7 +8,6 @@ names
 python-swiftclient
 PyYaml
 s3cmd
-s5cmd
 simplejson
 swiftly
 paramiko
